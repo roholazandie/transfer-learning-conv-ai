@@ -11,12 +11,12 @@ from tqdm import trange
 
 import torch
 import torch.nn.functional as F
-from parlai.core.agents import Agent
-from parlai.scripts.eval_model import setup_args as base_setup_args
-from projects.convai2.eval_hits import eval_hits, setup_args as setup_args_hits
-from projects.convai2.eval_f1 import eval_f1, setup_args as setup_args_f1
-from projects.convai2.eval_ppl import eval_ppl, setup_args as setup_args_ppl
-from projects.convai2.build_dict import build_dict
+from ParlAI.parlai.core.agents import Agent
+from ParlAI.parlai.scripts.eval_model import setup_args as base_setup_args
+from ParlAI.projects.convai2.eval_hits import eval_hits, setup_args as setup_args_hits
+from ParlAI.projects.convai2.eval_f1 import eval_f1, setup_args as setup_args_f1
+from ParlAI.projects.convai2.eval_ppl import eval_ppl, setup_args as setup_args_ppl
+from ParlAI.projects.convai2.build_dict import build_dict
 from pytorch_pretrained_bert import OpenAIGPTDoubleHeadsModel, OpenAIGPTLMHeadModel, OpenAIGPTTokenizer
 
 from train import build_input_from_segments, pad_dataset, SPECIAL_TOKENS

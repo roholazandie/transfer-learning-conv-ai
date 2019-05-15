@@ -7,3 +7,4 @@ ParlAI/
 __pycache__
 .idea/*
 env/*
+ParlAI/*
