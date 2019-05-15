@@ -5,3 +5,5 @@ dataset_cache*
 runs/
 ParlAI/
 __pycache__
+.idea/*
+env/*

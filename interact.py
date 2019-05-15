@@ -15,6 +15,7 @@ from pytorch_pretrained_bert import OpenAIGPTLMHeadModel, OpenAIGPTTokenizer
 from train import SPECIAL_TOKENS, build_input_from_segments
 from utils import get_dataset_personalities, download_pretrained_model
 
+
 def top_filtering(logits, top_k=0, top_p=0.0, threshold=-float('Inf'), filter_value=-float('Inf')):
     """ Filter a distribution of logits using top-k, top-p (nucleus) and/or threshold filtering
         Args:
@@ -81,13 +82,16 @@ def sample_sequence(personality, history, tokenizer, model, args, current_output
 
     return current_output
 
+
 def run():
     parser = ArgumentParser()
-    parser.add_argument("--dataset_path", type=str, default="", help="Path or url of the dataset. If empty download from S3.")
+    parser.add_argument("--dataset_path", type=str, default="",
+                        help="Path or url of the dataset. If empty download from S3.")
     parser.add_argument("--dataset_cache", type=str, default='./dataset_cache', help="Path or url of the dataset cache")
     parser.add_argument("--model_checkpoint", type=str, default="", help="Path, url or short name of the model")
     parser.add_argument("--max_history", type=int, default=2, help="Number of previous utterances to keep in history")
-    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", help="Device (cuda or cpu)")
+    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu",
+                        help="Device (cuda or cpu)")
 
     parser.add_argument("--no_sample", action='store_true', help="Set to use greedy decoding instead of sampling")
     parser.add_argument("--max_length", type=int, default=20, help="Maximum length of the output utterances")
@@ -95,7 +99,8 @@ def run():
     parser.add_argument("--seed", type=int, default=42, help="Seed")
     parser.add_argument("--temperature", type=int, default=0.7, help="Sampling softmax temperature")
     parser.add_argument("--top_k", type=int, default=0, help="Filter top-k tokens before sampling (<=0: no filtering)")
-    parser.add_argument("--top_p", type=float, default=0.9, help="Nucleus filtering (top-p) before sampling (<=0.0: no filtering)")
+    parser.add_argument("--top_p", type=float, default=0.9,
+                        help="Nucleus filtering (top-p) before sampling (<=0.0: no filtering)")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
@@ -130,7 +135,7 @@ def run():
         with torch.no_grad():
             out_ids = sample_sequence(personality, history, tokenizer, model, args)
         history.append(out_ids)
-        history = history[-(2*args.max_history+1):]
+        history = history[-(2 * args.max_history + 1):]
         out_text = tokenizer.decode(out_ids, skip_special_tokens=True)
         print(out_text)
 
