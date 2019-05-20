@@ -30,13 +30,14 @@ class TransformerAgent(Agent):
         agent_args.add_argument("--model_checkpoint", type=str, default="", help="Path, url or short name of the model")
         agent_args.add_argument("--max_history", type=int, default=2, help="Number of previous utterances to keep in history")
         agent_args.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", help="Device (cuda or cpu)")
-        agent_args.add_argument("--eval_type", type=str, default="hits@1", help="hits@1, ppl or f1")
+        agent_args.add_argument("--eval_type", type=str, default="ppl", help="hits@1, ppl or f1")
         agent_args.add_argument("--no_sample", action='store_true')
         agent_args.add_argument("--max_length", type=int, default=20)
         agent_args.add_argument("--min_length", type=int, default=1)
         agent_args.add_argument("--seed", type=int, default=0)
         agent_args.add_argument("--temperature", type=int, default=0.7)
         agent_args.add_argument("--top_k", type=int, default=20)
+        agent_args.add_argument("--top_p", type=float, default=0.9)
         return argparser
 
     def __init__(self, opt, shared=None):
@@ -140,7 +141,7 @@ class TransformerAgent(Agent):
 
             val, ind = torch.sort(mc_logits[0], descending=True)
 
-            ypred = self.candidates[ind[0].item()][1] # match
+            ypred = self.candidates[ind[0].item()][1] # match = highest logit is the choice of model as true output
             tc = []
             for j in range(len(self.candidates)):
                 tc.append(self.candidates[ind[j].item()][1])
@@ -148,7 +149,7 @@ class TransformerAgent(Agent):
         else:
             # We are in interactive of f1 evaluation mode => just sample
             with torch.no_grad():
-                out_ids, _ = sample_sequence(self.persona, self.history, self.tokenizer, self.model_checkpoint, self.args)
+                out_ids = sample_sequence(self.persona, self.history, self.tokenizer, self.model_checkpoint, self.args)
             out_text = self.tokenizer.decode(out_ids, skip_special_tokens=True,
                                              clean_up_tokenization_spaces=(self.args.eval_type != 'f1'))
             reply = {'text': out_text}

@@ -72,7 +72,7 @@ def sample_sequence(personality, history, tokenizer, model, args, current_output
         probs = F.softmax(logits, dim=-1)
 
         prev = torch.topk(probs, 1)[1] if args.no_sample else torch.multinomial(probs, 1)
-        if i < args.min_length and prev.item() in special_tokens_ids:
+        if i < args.min_length and prev.item() in special_tokens_ids: #todo rooh: to remove special tokens
             while prev.item() in special_tokens_ids:
                 prev = torch.multinomial(probs, num_samples=1)
 
