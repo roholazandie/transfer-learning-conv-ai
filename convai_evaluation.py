@@ -30,7 +30,7 @@ class TransformerAgent(Agent):
         agent_args.add_argument("--model_checkpoint", type=str, default="", help="Path, url or short name of the model")
         agent_args.add_argument("--max_history", type=int, default=2, help="Number of previous utterances to keep in history")
         agent_args.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", help="Device (cuda or cpu)")
-        agent_args.add_argument("--eval_type", type=str, default="ppl", help="hits@1, ppl or f1")
+        agent_args.add_argument("--eval_type", type=str, default="hits@1", help="hits@1, ppl or f1")
         agent_args.add_argument("--no_sample", action='store_true')
         agent_args.add_argument("--max_length", type=int, default=20)
         agent_args.add_argument("--min_length", type=int, default=1)
@@ -172,6 +172,7 @@ class TransformerAgent(Agent):
 
         probs = F.softmax(logits[0, -1], dim=0)
 
+        print(self.prefix2words[probs.argmax().item()])
         dist = {}
         for prefix_id, words in self.prefix2words.items():
             for word, ratio in words.items():
