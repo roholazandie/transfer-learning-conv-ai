@@ -262,7 +262,7 @@ class Attention(nn.Module):
         self.n_head = config.n_head
         self.split_size = n_state
         self.scale = scale
-        self.c_attn = Conv1D(n_state * 3, 1, nx)
+        self.c_attn = Conv1D(n_state * 3, 1, nx)#(out_channels, size_conv, in_channels)
         self.c_proj = Conv1D(n_state, 1, nx)
         self.attn_dropout = nn.Dropout(config.attn_pdrop)
         self.resid_dropout = nn.Dropout(config.resid_pdrop)

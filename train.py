@@ -49,15 +49,15 @@ def build_input_from_segments(persona, history, reply, tokenizer, lm_labels=Fals
     bos, eos, speaker1, speaker2 = tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS[:-1])
 
     instance = {}
-    sequence = [[bos] + list(chain(*persona))] + history + [reply + ([eos] if with_eos else [])]
+    sequence = [[bos] + list(chain(*persona))] + history + [reply + ([eos] if with_eos else [])] #seq = [personas, history, reply] concatenate all persona sentences
     sequence = [sequence[0]] + [[speaker2 if (len(sequence)-i) % 2 else speaker1] + s for i, s in enumerate(sequence[1:])]
 
     instance["input_ids"] = list(chain(*sequence))
-    instance["token_type_ids"] = [speaker2 if i % 2 else speaker1 for i, s in enumerate(sequence) for _ in s]
+    instance["token_type_ids"] = [speaker2 if i % 2 else speaker1 for i, s in enumerate(sequence) for _ in s] # the last for is for repeating the speaker1 and speaker2 for all tokens
     instance["mc_token_ids"] = len(instance["input_ids"]) - 1
     instance["lm_labels"] = [-1] * len(instance["input_ids"])
     if lm_labels:
-        instance["lm_labels"] = ([-1] * sum(len(s) for s in sequence[:-1])) + [-1] + sequence[-1][1:]
+        instance["lm_labels"] = ([-1] * sum(len(s) for s in sequence[:-1])) + [-1] + sequence[-1][1:] #all -1 except for reply, reply is just the ids
     return instance, sequence
 
 
@@ -77,7 +77,7 @@ def get_data_loaders(args, tokenizer):
                 for utterance in dialog["utterances"]:
                     history = utterance["history"][-(2*args.max_history+1):]
                     for j, candidate in enumerate(utterance["candidates"][-num_candidates:]):
-                        lm_labels = bool(j == num_candidates-1)
+                        lm_labels = bool(j == num_candidates-1) #the true label is always the last one in list of candidates
                         instance, _ = build_input_from_segments(persona, history, candidate, tokenizer, lm_labels)
                         for input_name, input_array in instance.items():
                             datasets[dataset_name][input_name].append(input_array)
@@ -124,7 +124,7 @@ def train():
     parser.add_argument("--n_epochs", type=int, default=3, help="Number of training epochs")
     parser.add_argument("--personality_permutations", type=int, default=1, help="Number of permutations of personality sentences")
     parser.add_argument("--eval_before_start", action='store_true', help="If true start with a first evaluation before training")
-    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", help="Device (cuda or cpu)")
+    parser.add_argument("--device", type=str, default="cpu" if torch.cuda.is_available() else "cpu", help="Device (cuda or cpu)")
     parser.add_argument("--fp16", type=str, default="", help="Set to O0, O1, O2 or O3 for fp16 training (see apex documentation)")
     parser.add_argument("--local_rank", type=int, default=-1, help="Local rank for distributed training (-1: not distributed)")
     parser.add_argument("--log_dir", type=str, default="", help="Local rank for distributed training (-1: not distributed)")
