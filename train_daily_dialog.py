@@ -106,7 +106,7 @@ def get_data_loaders(args, tokenizer):
 
 def train():
     parser = ArgumentParser()
-    parser.add_argument("--dataset_path", type=str, default="/home/rohola/data/train_out.json", help="Path or url of the dataset. If empty download from S3.")
+    parser.add_argument("--dataset_path", type=str, default="/home/rohola/data/daily_dialog.json", help="Path or url of the dataset. If empty download from S3.")
     parser.add_argument("--dataset_cache", type=str, default='./daily_dialog_dataset_cache', help="Path or url of the dataset cache")
     parser.add_argument("--model_checkpoint", type=str, default="openai-gpt", help="Path, url or short name of the model")
     parser.add_argument("--num_candidates", type=int, default=2, help="Number of candidates for training")
