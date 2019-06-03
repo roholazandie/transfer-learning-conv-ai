@@ -77,6 +77,9 @@ def get_data_loaders(args, tokenizer):
                 for j, candidate in enumerate(utterance["candidates"][-num_candidates:]):
                     lm_labels = bool(j == num_candidates-1) #the true label is always the last one in list of candidates
                     instance, _ = build_input_from_segments(history, candidate, tokenizer, lm_labels)
+                    if len(instance["input_ids"])> 500:
+                        instance, _ = build_input_from_segments(history, [], tokenizer, lm_labels)
+
                     for input_name, input_array in instance.items():
                         datasets[dataset_name][input_name].append(input_array)
                 datasets[dataset_name]["mc_labels"].append(num_candidates - 1)
@@ -96,7 +99,7 @@ def get_data_loaders(args, tokenizer):
     train_dataset, valid_dataset = TensorDataset(*tensor_datasets["train"]), TensorDataset(*tensor_datasets["valid"])
     train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset) if args.distributed else None
     valid_sampler = torch.utils.data.distributed.DistributedSampler(valid_dataset) if args.distributed else None
-    train_loader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size, shuffle=(not args.distributed))
+    train_loader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size, shuffle=False)
     valid_loader = DataLoader(valid_dataset, sampler=valid_sampler, batch_size=args.valid_batch_size, shuffle=False)
 
     logger.info("Train dataset (Batch, Candidates, Seq length): {}".format(train_dataset.tensors[0].shape))
