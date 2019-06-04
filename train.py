@@ -67,6 +67,7 @@ def get_data_loaders(args, tokenizer):
 
     logger.info("Build inputs and labels")
     datasets = {"train": defaultdict(list), "valid": defaultdict(list)}
+    max_len = -1
     for dataset_name, dataset in personachat.items():
         num_candidates = len(dataset[0]["utterances"][0]["candidates"])
         if args.num_candidates > 0 and dataset_name == 'train':
@@ -79,12 +80,14 @@ def get_data_loaders(args, tokenizer):
                     for j, candidate in enumerate(utterance["candidates"][-num_candidates:]):
                         lm_labels = bool(j == num_candidates-1) #the true label is always the last one in list of candidates
                         instance, _ = build_input_from_segments(persona, history, candidate, tokenizer, lm_labels)
+                        if len(instance["input_ids"])>max_len:
+                            max_len = len(instance["input_ids"])
                         for input_name, input_array in instance.items():
                             datasets[dataset_name][input_name].append(input_array)
                     datasets[dataset_name]["mc_labels"].append(num_candidates - 1)
                     datasets[dataset_name]["n_candidates"] = num_candidates
                 persona = [persona[-1]] + persona[:-1]  # permuted personalities
-
+    print(max_len)
     logger.info("Pad inputs and convert to Tensor")
     tensor_datasets = {"train": [], "valid": []}
     for dataset_name, dataset in datasets.items():
