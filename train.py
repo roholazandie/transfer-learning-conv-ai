@@ -19,7 +19,6 @@ from ignite.contrib.handlers.tensorboard_logger import TensorboardLogger, Output
 from pytorch_pretrained_bert import (OpenAIAdam, OpenAIGPTDoubleHeadsModel, OpenAIGPTTokenizer,
                                      GPT2DoubleHeadsModel, GPT2Tokenizer, WEIGHTS_NAME, CONFIG_NAME
                                      , BertModel)
-
 from utils import get_dataset
 
 SPECIAL_TOKENS = ["<bos>", "<eos>", "<speaker1>", "<speaker2>", "<pad>"]
@@ -68,7 +67,6 @@ def get_data_loaders(args, tokenizer):
 
     logger.info("Build inputs and labels")
     datasets = {"train": defaultdict(list), "valid": defaultdict(list)}
-    max_len = -1
     for dataset_name, dataset in personachat.items():
         num_candidates = len(dataset[0]["utterances"][0]["candidates"])
         if args.num_candidates > 0 and dataset_name == 'train':
@@ -81,14 +79,12 @@ def get_data_loaders(args, tokenizer):
                     for j, candidate in enumerate(utterance["candidates"][-num_candidates:]):
                         lm_labels = bool(j == num_candidates-1) #the true label is always the last one in list of candidates
                         instance, _ = build_input_from_segments(persona, history, candidate, tokenizer, lm_labels)
-                        if len(instance["input_ids"])>max_len:
-                            max_len = len(instance["input_ids"])
                         for input_name, input_array in instance.items():
                             datasets[dataset_name][input_name].append(input_array)
                     datasets[dataset_name]["mc_labels"].append(num_candidates - 1)
                     datasets[dataset_name]["n_candidates"] = num_candidates
                 persona = [persona[-1]] + persona[:-1]  # permuted personalities
-    print(max_len)
+
     logger.info("Pad inputs and convert to Tensor")
     tensor_datasets = {"train": [], "valid": []}
     for dataset_name, dataset in datasets.items():
@@ -115,11 +111,11 @@ def train():
     parser = ArgumentParser()
     parser.add_argument("--dataset_path", type=str, default="", help="Path or url of the dataset. If empty download from S3.")
     parser.add_argument("--dataset_cache", type=str, default='./dataset_cache', help="Path or url of the dataset cache")
-    parser.add_argument("--model_checkpoint", type=str, default="openai-gpt", help="Path, url or short name of the model")
+    parser.add_argument("--model_checkpoint", type=str, default="gpt2", help="Path, url or short name of the model")
     parser.add_argument("--num_candidates", type=int, default=2, help="Number of candidates for training")
     parser.add_argument("--max_history", type=int, default=2, help="Number of previous exchanges to keep in history")
-    parser.add_argument("--train_batch_size", type=int, default=2, help="Batch size for training")
-    parser.add_argument("--valid_batch_size", type=int, default=2, help="Batch size for validation")
+    parser.add_argument("--train_batch_size", type=int, default=4, help="Batch size for training")
+    parser.add_argument("--valid_batch_size", type=int, default=4, help="Batch size for validation")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=8, help="Accumulate gradients on several steps")
     parser.add_argument("--lr", type=float, default=6.25e-5, help="Learning rate")
     parser.add_argument("--lm_coef", type=float, default=1.0, help="LM loss coefficient")
@@ -139,6 +135,7 @@ def train():
     logger.warning("Running process %d", args.local_rank)  # This is a logger.warning: it will be printed by all distributed processes
     logger.info("Arguments: %s", pformat(args))
 
+
     # Initialize distributed training if needed
     args.distributed = (args.local_rank != -1)
     if args.distributed:
@@ -152,7 +149,8 @@ def train():
     model_class = GPT2DoubleHeadsModel if "gpt2" in args.model_checkpoint else OpenAIGPTDoubleHeadsModel
     model = model_class.from_pretrained(args.model_checkpoint)
     tokenizer.set_special_tokens(SPECIAL_TOKENS)
-    #model.set_num_special_tokens(len(SPECIAL_TOKENS))
+    model.set_num_special_tokens(len(SPECIAL_TOKENS))
+    #model.set_tied()
     model.to(args.device)
     optimizer = OpenAIAdam(model.parameters(), lr=args.lr)
 
