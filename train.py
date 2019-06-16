@@ -115,7 +115,7 @@ def train():
     parser.add_argument("--num_candidates", type=int, default=2, help="Number of candidates for training")
     parser.add_argument("--max_history", type=int, default=2, help="Number of previous exchanges to keep in history")
     parser.add_argument("--train_batch_size", type=int, default=2, help="Batch size for training")
-    parser.add_argument("--valid_batch_size", type=int, default=2, help="Batch size for validation")
+    parser.add_argument("--valid_batch_size", type=int, default=1, help="Batch size for validation")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=8, help="Accumulate gradients on several steps")
     parser.add_argument("--lr", type=float, default=6.25e-5, help="Learning rate")
     parser.add_argument("--lm_coef", type=float, default=1.0, help="LM loss coefficient")
@@ -170,9 +170,7 @@ def train():
     def update(engine, batch):
         model.train()
         batch = tuple(input_tensor.to(args.device) for input_tensor in batch)
-        #[lm_loss, mc_loss], presents = model(*batch, past=past)
         lm_loss, mc_loss = model(*batch)
-        #engine.state.presents = presents
         loss = (lm_loss * args.lm_coef + mc_loss * args.mc_coef) / args.gradient_accumulation_steps
         if args.fp16:
             with amp.scale_loss(loss, optimizer) as scaled_loss:
@@ -187,15 +185,6 @@ def train():
         return loss.item()
     trainer = Engine(update)
 
-    # @trainer.on(Events.STARTED)
-    # def init_all_custom_var(engine):
-    #     engine.state.past = None
-    #
-    # @trainer.on(Events.ITERATION_COMPLETED)
-    # def accumulate_testing_measure(engine):
-    #     engine.state.past = engine.state.presents
-
-
 
     # Evaluation function and evaluator (evaluator output is the input of the metrics)
     def inference(engine, batch):
@@ -204,12 +193,25 @@ def train():
             batch = tuple(input_tensor.to(args.device) for input_tensor in batch)
             input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids = batch
             #logger.info(tokenizer.decode(input_ids[0, -1, :].tolist()))
+            #model_outputs = model(input_ids, mc_token_ids, token_type_ids=token_type_ids, past=engine.state.past)
             model_outputs = model(input_ids, mc_token_ids, token_type_ids=token_type_ids)
-            lm_logits, mc_logits = model_outputs[0], model_outputs[1]  # So we can also use GPT2 outputs
+            lm_logits, mc_logits, presents = model_outputs[0], model_outputs[1], model_outputs[2]
+            #engine.state.presents = presents
             lm_logits_flat_shifted = lm_logits[..., :-1, :].contiguous().view(-1, lm_logits.size(-1))
             lm_labels_flat_shifted = lm_labels[..., 1:].contiguous().view(-1)
             return (lm_logits_flat_shifted, mc_logits), (lm_labels_flat_shifted, mc_labels)
+
     evaluator = Engine(inference)
+
+    # @evaluator.on(Events.STARTED)
+    # def init_all_custom_var(engine):
+    #     engine.state.past = None
+    #
+    # @evaluator.on(Events.ITERATION_COMPLETED)
+    # def accumulate_testing_measure(engine):
+    #     engine.state.past = engine.state.presents
+
+    #evaluator.run(val_loader)
 
     # Attach evaluation to trainer: we evaluate when we start the training and at the end of each epoch
     trainer.add_event_handler(Events.EPOCH_COMPLETED, lambda _: evaluator.run(val_loader))
