@@ -170,7 +170,8 @@ def train():
     def update(engine, batch):
         model.train()
         batch = tuple(input_tensor.to(args.device) for input_tensor in batch)
-        [lm_loss, mc_loss], presents = model(*batch)
+        #[lm_loss, mc_loss], presents = model(*batch, past=past)
+        lm_loss, mc_loss = model(*batch)
         #engine.state.presents = presents
         loss = (lm_loss * args.lm_coef + mc_loss * args.mc_coef) / args.gradient_accumulation_steps
         if args.fp16:
