@@ -634,7 +634,7 @@ class OpenAIGPTModel(OpenAIGPTPreTrainedModel):
         # Copy word embeddings from the previous weights
         self.tokens_embed.weight.data[:self.config.vocab_size, :] = old_embed.weight.data[:self.config.vocab_size, :]
 
-    def forward(self, input_ids, position_ids=None, token_type_ids=None):
+    def forward(self, input_ids, position_ids=None, token_type_ids=None, token_info_ids=None):
         if position_ids is None:
             # This was used when we had a single embedding matrice from position and token embeddings
             # start = self.config.vocab_size + self.config.n_special
@@ -654,7 +654,14 @@ class OpenAIGPTModel(OpenAIGPTPreTrainedModel):
             token_type_embeds = self.tokens_embed(token_type_ids)
         else:
             token_type_embeds = 0
-        hidden_states = inputs_embeds + position_embeds + token_type_embeds
+
+        if token_info_ids is not None:
+            token_info_ids = token_info_ids.view(-1, token_info_ids.size(-1))
+            token_info_embeds = self.tokens_embed(token_info_ids)
+        else:
+            token_info_embeds = 0
+
+        hidden_states = inputs_embeds + position_embeds + token_type_embeds + token_info_embeds
         hidden_states = self.drop(hidden_states)
 
         all_attentions = []
@@ -835,8 +842,8 @@ class OpenAIGPTDoubleHeadsModel(OpenAIGPTPreTrainedModel):
         self.transformer.set_num_special_tokens(num_special_tokens)
         self.lm_head.set_embeddings_weights(self.transformer.tokens_embed.weight, predict_special_tokens=predict_special_tokens)
 
-    def forward(self, input_ids, mc_token_ids, lm_labels=None, mc_labels=None, token_type_ids=None, position_ids=None):
-        hidden_states = self.transformer(input_ids, position_ids, token_type_ids)
+    def forward(self, input_ids, mc_token_ids, lm_labels=None, mc_labels=None, token_type_ids=None, token_info_ids=None, position_ids=None):
+        hidden_states = self.transformer(input_ids, position_ids, token_type_ids, token_info_ids)
         if self.transformer.output_attentions:
             all_attentions, hidden_states = hidden_states
         lm_logits = self.lm_head(hidden_states)
