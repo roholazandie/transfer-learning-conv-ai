@@ -111,6 +111,7 @@ def train():
     parser = ArgumentParser()
     parser.add_argument("--dataset_path", type=str, default="", help="Path or url of the dataset. If empty download from S3.")
     parser.add_argument("--dataset_cache", type=str, default='./dataset_cache', help="Path or url of the dataset cache")
+    #parser.add_argument("--model_checkpoint", type=str, default="/home/rohola/codes/transfer-learning-conv-ai/runs/Jun17_13-49-39_rohola-pc", help="Path, url or short name of the model")
     parser.add_argument("--model_checkpoint", type=str, default="openai-gpt", help="Path, url or short name of the model")
     parser.add_argument("--num_candidates", type=int, default=2, help="Number of candidates for training")
     parser.add_argument("--max_history", type=int, default=2, help="Number of previous exchanges to keep in history")
@@ -121,7 +122,7 @@ def train():
     parser.add_argument("--lm_coef", type=float, default=1.0, help="LM loss coefficient")
     parser.add_argument("--mc_coef", type=float, default=1.0, help="Multiple-choice loss coefficient")
     parser.add_argument("--max_norm", type=float, default=1.0, help="Clipping gradient norm")
-    parser.add_argument("--n_epochs", type=int, default=3, help="Number of training epochs")
+    parser.add_argument("--n_epochs", type=int, default=1, help="Number of training epochs")
     parser.add_argument("--personality_permutations", type=int, default=1, help="Number of permutations of personality sentences")
     parser.add_argument("--eval_before_start", action='store_true', help="If true start with a first evaluation before training")
     parser.add_argument("--device", type=str, default="cuda:0" if torch.cuda.is_available() else "cpu", help="Device (cuda or cpu)")
@@ -194,7 +195,7 @@ def train():
             #logger.info(tokenizer.decode(input_ids[0, -1, :].tolist()))
             #model_outputs = model(input_ids, mc_token_ids, token_type_ids=token_type_ids, past=engine.state.past)
             model_outputs = model(input_ids, mc_token_ids, token_type_ids=token_type_ids)
-            lm_logits, mc_logits, presents = model_outputs[0], model_outputs[1], model_outputs[2]
+            lm_logits, mc_logits = model_outputs[0], model_outputs[1]
             #engine.state.presents = presents
             lm_logits_flat_shifted = lm_logits[..., :-1, :].contiguous().view(-1, lm_logits.size(-1))
             lm_labels_flat_shifted = lm_labels[..., 1:].contiguous().view(-1)
