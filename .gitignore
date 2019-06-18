@@ -2,6 +2,7 @@
 experiments/
 data/
 dataset_cache*
+dataset1_cache*
 daily_dialog_*
 runs/
 ParlAI/

@@ -125,7 +125,7 @@ def train():
     parser.add_argument("--n_epochs", type=int, default=3, help="Number of training epochs")
     parser.add_argument("--personality_permutations", type=int, default=1, help="Number of permutations of personality sentences")
     parser.add_argument("--eval_before_start", action='store_true', help="If true start with a first evaluation before training")
-    parser.add_argument("--device", type=str, default="cuda:0" if torch.cuda.is_available() else "cpu", help="Device (cuda or cpu)")
+    parser.add_argument("--device", type=str, default="cpu" if torch.cuda.is_available() else "cpu", help="Device (cuda or cpu)")
     parser.add_argument("--fp16", type=str, default="", help="Set to O0, O1, O2 or O3 for fp16 training (see apex documentation)")
     parser.add_argument("--local_rank", type=int, default=-1, help="Local rank for distributed training (-1: not distributed)")
     parser.add_argument("--log_dir", type=str, default="", help="Local rank for distributed training (-1: not distributed)")
@@ -191,8 +191,8 @@ def train():
         model.eval()
         with torch.no_grad():
             batch = tuple(input_tensor.to(args.device) for input_tensor in batch)
-            input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids = batch
-            model_outputs = model(input_ids, mc_token_ids, token_type_ids=token_type_ids)
+            input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids, token_info_ids = batch
+            model_outputs = model(input_ids, mc_token_ids, token_type_ids=token_type_ids, token_info_ids=token_info_ids)
             lm_logits, mc_logits = model_outputs[0], model_outputs[1]
             #engine.state.presents = presents
             lm_logits_flat_shifted = lm_logits[..., :-1, :].contiguous().view(-1, lm_logits.size(-1))

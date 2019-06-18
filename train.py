@@ -65,6 +65,10 @@ def get_data_loaders(args, tokenizer):
     """ Prepare the dataset for training and evaluation """
     personachat = get_dataset(tokenizer, args.dataset_path, args.dataset_cache)
 
+    #todo remove soon
+    # personachat["train"] = personachat["train"][:500]
+    # personachat["valid"] = personachat["valid"][:100]
+
     logger.info("Build inputs and labels")
     datasets = {"train": defaultdict(list), "valid": defaultdict(list)}
     for dataset_name, dataset in personachat.items():
@@ -111,8 +115,8 @@ def train():
     parser = ArgumentParser()
     parser.add_argument("--dataset_path", type=str, default="", help="Path or url of the dataset. If empty download from S3.")
     parser.add_argument("--dataset_cache", type=str, default='./dataset_cache', help="Path or url of the dataset cache")
-    #parser.add_argument("--model_checkpoint", type=str, default="/home/rohola/codes/transfer-learning-conv-ai/runs/Jun17_13-49-39_rohola-pc", help="Path, url or short name of the model")
-    parser.add_argument("--model_checkpoint", type=str, default="openai-gpt", help="Path, url or short name of the model")
+    parser.add_argument("--model_checkpoint", type=str, default="/home/rohola/codes/transfer-learning-conv-ai/runs/Jun18_10-40-49_rohola-pc", help="Path, url or short name of the model")
+    #parser.add_argument("--model_checkpoint", type=str, default="openai-gpt", help="Path, url or short name of the model")
     parser.add_argument("--num_candidates", type=int, default=2, help="Number of candidates for training")
     parser.add_argument("--max_history", type=int, default=2, help="Number of previous exchanges to keep in history")
     parser.add_argument("--train_batch_size", type=int, default=2, help="Batch size for training")
