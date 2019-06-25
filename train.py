@@ -74,7 +74,7 @@ def get_data_loaders(args, tokenizer):
     for dataset_name, dataset in personachat.items():
         num_candidates = len(dataset[0]["utterances"][0]["candidates"])
         if args.num_candidates > 0 and dataset_name == 'train':
-            num_candidates = min(args.num_candidates, num_candidates)
+            num_candidates = min(args.num_candidates, num_candidates) #for training we use 2 candidates but for validation 20
         for dialog in dataset:
             persona = dialog["personality"].copy()
             for _ in range(args.personality_permutations):
@@ -119,7 +119,7 @@ def train():
     #parser.add_argument("--model_checkpoint", type=str, default="openai-gpt", help="Path, url or short name of the model")
     parser.add_argument("--num_candidates", type=int, default=2, help="Number of candidates for training")
     parser.add_argument("--max_history", type=int, default=2, help="Number of previous exchanges to keep in history")
-    parser.add_argument("--train_batch_size", type=int, default=2, help="Batch size for training")
+    parser.add_argument("--train_batch_size", type=int, default=3, help="Batch size for training")
     parser.add_argument("--valid_batch_size", type=int, default=1, help="Batch size for validation")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=8, help="Accumulate gradients on several steps")
     parser.add_argument("--lr", type=float, default=6.25e-5, help="Learning rate")
