@@ -431,6 +431,62 @@ class Block(nn.Module):
         return h
 
 
+class Block1(nn.Module):
+    def __init__(self, n_ctx, config, scale=False, output_attentions=False):
+        super(Block1, self).__init__()
+        nx = config.n_embd
+        self.output_attentions = output_attentions
+        #self.attn = Attention(nx, n_ctx, config, scale, output_attentions)
+        self.multi_attn = MultiheadAttention(nx, n_ctx, config, scale, output_attentions)
+        self.ln_1 = LayerNorm(nx, eps=config.layer_norm_epsilon)
+        self.mlp = MLP(4 * nx, config)
+        self.ln_2 = LayerNorm(nx, eps=config.layer_norm_epsilon)
+
+    def forward(self, hidden_state):
+        length = hidden_state.size(-2)
+
+        reply, history, persona = torch.split(hidden_state, length//3, dim=-2)
+
+        reply = reply.contiguous()
+        history = history.contiguous()
+        persona = persona.contiguous()
+
+        a1 = self.multi_attn(reply, reply, reply)
+        a2 = self.multi_attn(reply, history, history)
+        a3 = self.multi_attn(reply, persona, persona)
+
+        n1 = self.ln_1(reply + a1)
+        m1 = self.mlp(n1)
+        h1 = self.ln_2(n1 + m1)
+
+        n2 = self.ln_1(history + a2)
+        m2 = self.mlp(n2)
+        h2 = self.ln_2(n2 + m2)
+
+        n3 = self.ln_1(persona + a3)
+        m3 = self.mlp(n3)
+        h3 = self.ln_2(n3 + m3)
+
+        h = torch.cat([h1, h2, h3], dim=-2)
+
+        return h
+
+    # def forward(self, reply, history, persona):
+    #
+    #     a1 = self.multi_attn(reply, reply, reply)
+    #     a2 = self.multi_attn(reply, history, history)
+    #     a3 = self.multi_attn(reply, persona, persona)
+    #
+    #     a = a1 + a2 + a3
+    #     n = self.ln_1(reply + a)
+    #     m = self.mlp(n)
+    #     h = self.ln_2(n + m)
+    #     #if self.output_attentions:
+    #     #    return attentions, h
+    #     return h
+
+
+
 class OpenAIGPTLMHead(nn.Module):
     """ Language Model Head for the transformer """
 
@@ -693,7 +749,7 @@ class OpenAIGPTModel(OpenAIGPTPreTrainedModel):
         self.tokens_embed = nn.Embedding(config.total_tokens_embeddings, config.n_embd)
         self.positions_embed = nn.Embedding(config.n_positions, config.n_embd)
         self.drop = nn.Dropout(config.embd_pdrop)
-        block = Block(config.n_ctx, config, scale=True, output_attentions=output_attentions)
+        block = Block1(config.n_ctx, config, scale=True, output_attentions=output_attentions)
         self.h = nn.ModuleList([copy.deepcopy(block) for _ in range(config.n_layer)])
 
         self.apply(self.init_weights)
@@ -774,17 +830,18 @@ class OpenAIGPTModel(OpenAIGPTPreTrainedModel):
         persona_hidden_states = self.drop(persona_hidden_states)
 
         all_attentions = []
+        hidden_states = torch.cat([reply_hidden_states, history_hidden_states, persona_hidden_states], dim=-2)
         for block in self.h:
             if self.output_attentions:
                 attentions, hidden_states = block(hidden_states)
                 all_attentions.append(attentions)
             else:
-                reply_hidden_states = block(reply_hidden_states, history_hidden_states, persona_hidden_states)
+                hidden_states = block(hidden_states)
 
-        output_shape = reply_ids_shape + (reply_hidden_states.size(-1),)
+        output_shape = (reply_ids_shape[0], reply_ids_shape[1], reply_ids_shape[2]*3) + (reply_hidden_states.size(-1),)
         if self.output_attentions:
             return all_attentions, reply_hidden_states.view(*output_shape)
-        return reply_hidden_states.view(*output_shape)
+        return hidden_states.view(*output_shape)
 
 
 class OpenAIGPTLMHeadModel(OpenAIGPTPreTrainedModel):
@@ -957,7 +1014,10 @@ class OpenAIGPTDoubleHeadsModel(OpenAIGPTPreTrainedModel):
         hidden_states = self.transformer(persona_ids, history_ids, reply_ids, position_ids, history_token_type, token_info_ids)
         if self.transformer.output_attentions:
             all_attentions, hidden_states = hidden_states
-        lm_logits = self.lm_head(hidden_states)
+
+        length = hidden_states.size(-2)
+        reply_hidden_states = hidden_states[:, :, 0:length // 3, :]
+        lm_logits = self.lm_head(reply_hidden_states)
         mc_logits = self.multiple_choice_head(hidden_states, mc_token_ids)
         losses = []
         if lm_labels is not None:
