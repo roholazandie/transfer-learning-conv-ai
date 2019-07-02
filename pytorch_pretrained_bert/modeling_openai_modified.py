@@ -769,9 +769,6 @@ class OpenAIGPTModel(OpenAIGPTPreTrainedModel):
         self.tokens_embed.weight.data[:self.config.vocab_size, :] = old_embed.weight.data[:self.config.vocab_size, :]
 
     def forward(self, persona_ids, history_ids, reply_ids, position_ids=None, history_token_type_ids=None, token_info_ids=None):
-
-
-
         if position_ids is None:
             persona_position_ids = torch.arange(persona_ids.size(-1), dtype=torch.long, device=persona_ids.device)
             persona_position_ids = persona_position_ids.unsqueeze(0).expand_as(persona_ids)

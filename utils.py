@@ -6,15 +6,46 @@ import logging
 import os
 import tarfile
 import tempfile
+import re
 
 import torch
 
 from pytorch_pretrained_bert import cached_path
+try:
+    from nltk.translate import bleu_score as nltkbleu
+except ImportError:
+    # User doesn't have nltk installed, so we can't use it for bleu
+    # We'll just turn off things, but we might want to warn the user
+    nltkbleu = None
+
+
 
 PERSONACHAT_URL = "https://s3.amazonaws.com/datasets.huggingface.co/personachat/personachat_self_original.json"
 HF_FINETUNED_MODEL = "https://s3.amazonaws.com/models.huggingface.co/transfer-learning-chatbot/finetuned_chatbot_gpt.tar.gz"
 
 logger = logging.getLogger(__file__)
+
+
+re_art = re.compile(r'\b(a|an|the)\b')
+re_punc = re.compile(r'[!"#$%&()*+,-./:;<=>?@\[\]\\^`{|}~_\']')
+
+
+def normalize_answer(s):
+    """Lower text and remove punctuation, articles and extra whitespace."""
+    def remove_articles(text):
+        return re_art.sub(' ', text)
+
+    def white_space_fix(text):
+        return ' '.join(text.split())
+
+    def remove_punc(text):
+        return re_punc.sub(' ', text)  # convert punctuation to spaces
+
+    def lower(text):
+        return text.lower()
+
+    return white_space_fix(remove_articles(remove_punc(lower(s))))
+
 
 def download_pretrained_model():
     """ Download and extract finetuned model from S3 """
@@ -83,6 +114,26 @@ def get_dataset_personalities(tokenizer, dataset_path, dataset_cache=None):
 
     logger.info("Gathered {} personalities".format(len(personalities)))
     return personalities
+
+
+def _bleu(guess, answers):
+    """Compute approximate BLEU score between guess and a set of answers."""
+    if nltkbleu is None:
+        # bleu library not installed, just return a default value
+        return None
+    # Warning: BLEU calculation *should* include proper tokenization and
+    # punctuation etc. We're using the normalize_answer for everything though,
+    # so we're over-estimating our BLEU scores.  Also note that NLTK's bleu is
+    # going to be slower than fairseq's (which is written in C), but fairseq's
+    # requires that everything be in arrays of ints (i.e. as tensors). NLTK's
+    # works with strings, which is better suited for this module.
+    return nltkbleu.sentence_bleu(
+        [normalize_answer(a).split(" ") for a in answers],
+        normalize_answer(guess).split(" "),
+        smoothing_function=nltkbleu.SmoothingFunction(epsilon=1e-12).method3,
+    )
+
+
 
 class AttrDict(dict):
     def __init__(self, *args, **kwargs):
