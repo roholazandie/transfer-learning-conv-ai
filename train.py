@@ -66,8 +66,8 @@ def get_data_loaders(args, tokenizer):
     personachat = get_dataset(tokenizer, args.dataset_path, args.dataset_cache)
 
     #todo remove soon
-    # personachat["train"] = personachat["train"][:500]
-    # personachat["valid"] = personachat["valid"][:100]
+    personachat["train"] = personachat["train"][:100]
+    personachat["valid"] = personachat["valid"][:10]
 
     logger.info("Build inputs and labels")
     datasets = {"train": defaultdict(list), "valid": defaultdict(list)}
@@ -119,7 +119,7 @@ def train():
     parser.add_argument("--model_checkpoint", type=str, default="openai-gpt", help="Path, url or short name of the model")
     parser.add_argument("--num_candidates", type=int, default=2, help="Number of candidates for training")
     parser.add_argument("--max_history", type=int, default=2, help="Number of previous exchanges to keep in history")
-    parser.add_argument("--train_batch_size", type=int, default=2, help="Batch size for training")
+    parser.add_argument("--train_batch_size", type=int, default=3, help="Batch size for training")
     parser.add_argument("--valid_batch_size", type=int, default=1, help="Batch size for validation")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=8, help="Accumulate gradients on several steps")
     parser.add_argument("--lr", type=float, default=6.25e-5, help="Learning rate")

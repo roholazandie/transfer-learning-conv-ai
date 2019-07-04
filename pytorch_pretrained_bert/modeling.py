@@ -1290,10 +1290,10 @@ class BertMultipleChoice(BertPreTrainedModel):
         self.classifier = nn.Linear(config.hidden_size, 1)
         self.apply(self.init_bert_weights)
 
-    def forward(self, pooled_output, labels=None, head_mask=None):
+    def forward(self, pooled_output, num_choices=2, labels=None, head_mask=None):
         pooled_output = self.dropout(pooled_output)
         logits = self.classifier(pooled_output)
-        reshaped_logits = logits.view(-1, self.num_choices)
+        reshaped_logits = logits.view(-1, num_choices)
 
         if labels is not None:
             loss_fct = CrossEntropyLoss()
@@ -1494,13 +1494,18 @@ class BertDoubleHeadsModel(BertPreTrainedModel):
         self.apply(self.init_bert_weights)
 
     def forward(self, input_ids, mc_token_ids, input_mask=None, lm_labels=None, mc_labels=None, token_type_ids=None, position_ids=None):
+        input_shape = input_ids.size() #(B, C, F)
         flat_input_ids = input_ids.view(-1, input_ids.size(-1))
         flat_token_type_ids = token_type_ids.view(-1, token_type_ids.size(-1)) if token_type_ids is not None else None
         flat_attention_mask = input_mask.view(-1, input_mask.size(-1)) if input_mask is not None else None
         hidden_states, pooled_output = self.bert(flat_input_ids, flat_token_type_ids, flat_attention_mask, output_all_encoded_layers=False)
 
+        num_choices = input_shape[1]
+        output_shape = (input_shape) + (hidden_states.size(-1),)
+        hidden_states = hidden_states.view(*output_shape)
+
         lm_logits = self.lm_head(hidden_states)
-        mc_logits = self.multiple_choice_head(pooled_output)
+        mc_logits = self.multiple_choice_head(pooled_output, num_choices=num_choices)
         losses = []
         if lm_labels is not None:
             shift_logits = lm_logits[..., :-1, :].contiguous()
