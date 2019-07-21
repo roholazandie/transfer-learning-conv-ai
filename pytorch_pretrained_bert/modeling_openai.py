@@ -634,7 +634,7 @@ class OpenAIGPTModel(OpenAIGPTPreTrainedModel):
         # Copy word embeddings from the previous weights
         self.tokens_embed.weight.data[:self.config.vocab_size, :] = old_embed.weight.data[:self.config.vocab_size, :]
 
-    def forward(self, input_ids, position_ids=None, token_type_ids=None, token_info_ids=None):
+    def forward(self, input_ids, position_ids=None, token_type_ids=None, token_emotion_ids=None):
         if position_ids is None:
             # This was used when we had a single embedding matrice from position and token embeddings
             # start = self.config.vocab_size + self.config.n_special
@@ -655,13 +655,13 @@ class OpenAIGPTModel(OpenAIGPTPreTrainedModel):
         else:
             token_type_embeds = 0
 
-        if token_info_ids is not None:
-            token_info_ids = token_info_ids.view(-1, token_info_ids.size(-1))
-            token_info_embeds = self.tokens_embed(token_info_ids)
+        if token_emotion_ids is not None:
+            token_emotion_ids = token_emotion_ids.view(-1, token_emotion_ids.size(-1))
+            token_emotion_embeds = self.tokens_embed(token_emotion_ids)
         else:
-            token_info_embeds = 0
+            token_emotion_embeds = 0
 
-        hidden_states = inputs_embeds + position_embeds + token_type_embeds + token_info_embeds
+        hidden_states = inputs_embeds + position_embeds + token_type_embeds + token_emotion_embeds
         hidden_states = self.drop(hidden_states)
 
         all_attentions = []
@@ -842,44 +842,14 @@ class OpenAIGPTDoubleHeadsModel(OpenAIGPTPreTrainedModel):
         self.transformer.set_num_special_tokens(num_special_tokens)
         self.lm_head.set_embeddings_weights(self.transformer.tokens_embed.weight, predict_special_tokens=predict_special_tokens)
 
-
-    # def forward(self, input_ids, mc_token_ids, lm_labels=None, mc_labels=None, token_type_ids=None, token_info_ids=None, position_ids=None):
-    #     hidden_states = self.transformer(input_ids, position_ids, token_type_ids, token_info_ids)
-    #     if self.transformer.output_attentions:
-    #         all_attentions, hidden_states = hidden_states
-    #     lm_logits = self.lm_head(hidden_states)
-    #     if mc_token_ids:
-    #         mc_logits = self.multiple_choice_head(hidden_states, mc_token_ids)
-    #     else:
-    #         return hidden_states
-    #     losses = []
-    #     label = 19
-    #     if (mc_logits == mc_logits.max()).nonzero()[0,1].numpy()!=19:
-    #         print("wrong labeling")
-    #         label = (mc_logits == mc_logits.max()).nonzero()[0,1].numpy()
-    #     if lm_labels is not None:
-    #         shift_logits = lm_logits[..., :-1, :].contiguous()
-    #         shift_labels = lm_labels[..., 1:].contiguous()
-    #         loss_fct = CrossEntropyLoss(ignore_index=-1)
-    #         losses.append(loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1)))
-    #     if mc_labels is not None:
-    #         loss_fct = CrossEntropyLoss()
-    #         losses.append(loss_fct(mc_logits.view(-1, mc_logits.size(-1)), mc_labels.view(-1)))
-    #     if losses:
-    #         return losses
-    #     if self.transformer.output_attentions:
-    #         return all_attentions, lm_logits, mc_logits
-    #     return lm_logits, mc_logits, label
-
-
-    def forward(self, input_ids, mc_token_ids, lm_labels=None, mc_labels=None, token_type_ids=None, token_info_ids=None, position_ids=None):
-        hidden_states = self.transformer(input_ids, position_ids, token_type_ids, token_info_ids)
+    def forward(self, input_ids, mc_token_ids, lm_labels=None, mc_labels=None, token_type_ids=None, token_emotion_ids=None, position_ids=None):
+        hidden_states = self.transformer(input_ids, position_ids, token_type_ids, token_emotion_ids)
         if self.transformer.output_attentions:
             all_attentions, hidden_states = hidden_states
         lm_logits = self.lm_head(hidden_states)
         mc_logits = self.multiple_choice_head(hidden_states, mc_token_ids)
         losses = []
-        if lm_labels is not None:
+        if lm_labels is not None: # when lm_labels is all -1 it means it's not the correct candidate which in turn means it's a negative example and we ignore it because ignore_index=-1
             shift_logits = lm_logits[..., :-1, :].contiguous()
             shift_labels = lm_labels[..., 1:].contiguous()
             loss_fct = CrossEntropyLoss(ignore_index=-1)

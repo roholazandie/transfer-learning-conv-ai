@@ -7,13 +7,14 @@ import random
 from argparse import ArgumentParser
 from itertools import chain
 from pprint import pformat
+import numpy as np
 
 import torch
 import torch.nn.functional as F
 
 from pytorch_pretrained_bert import OpenAIGPTLMHeadModel, OpenAIGPTTokenizer, GPT2LMHeadModel, GPT2Tokenizer
 from train import SPECIAL_TOKENS, build_input_from_segments
-from utils import download_pretrained_model, get_dataset, _bleu
+from utils import download_pretrained_model, get_dataset, _bleu, _f1_score
 
 
 def top_filtering(logits, top_k=0, top_p=0.0, threshold=-float('Inf'), filter_value=-float('Inf')):
@@ -85,13 +86,16 @@ def sample_sequence(personality, history, tokenizer, model, args, current_output
     return current_output
 
 
-def calculate_bleu(args, model, tokenizer, dataset):
-    special_tokens_ids = tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS)
+def calculate_metrics(args, model, tokenizer, dataset, special_tokens):
+    special_tokens_ids = tokenizer.convert_tokens_to_ids(special_tokens)
 
-
+    all_blues = []
+    all_f1_scores = []
     for data in dataset['valid']:
         personality = data['personality']
         utterances = data['utterances']
+
+        #utterance = utterances[-1] #only the longest conversaion
 
         for utterance in utterances:
             true_label = utterance['candidates'][-1]
@@ -99,7 +103,7 @@ def calculate_bleu(args, model, tokenizer, dataset):
 
             predicted_output = []
             for i in range(args.max_length):
-                instance, _ = build_input_from_segments(personality, history, predicted_output, tokenizer, with_eos=False)
+                instance, _ = build_input_from_segments(personality, history, predicted_output, tokenizer, special_tokens, with_eos=False)
 
                 input_ids = torch.tensor(instance["input_ids"], device=args.device).unsqueeze(0)
                 token_type_ids = torch.tensor(instance["token_type_ids"], device=args.device).unsqueeze(0)
@@ -114,8 +118,10 @@ def calculate_bleu(args, model, tokenizer, dataset):
 
                 prev = torch.topk(probs, 1)[1] if args.no_sample else torch.multinomial(probs, 1)
                 if i < args.min_length and prev.item() in special_tokens_ids:  # todo rooh: to remove special tokens
-                    while prev.item() in special_tokens_ids:
+                    k=0
+                    while prev.item() in special_tokens_ids and k < 100:
                         prev = torch.multinomial(probs, num_samples=1)
+                        k+=1
 
                 if prev.item() in special_tokens_ids:
                     break
@@ -124,17 +130,23 @@ def calculate_bleu(args, model, tokenizer, dataset):
             predicted_sentence = tokenizer.decode(predicted_output, skip_special_tokens=True)
             true_sentence = tokenizer.decode(true_label, skip_special_tokens=True)
             bleu = _bleu(predicted_sentence, [true_sentence])
-            print(bleu)
+            f1_score = _f1_score(predicted_sentence, [true_sentence])
+            #print(f1_score)
+            all_blues.append(bleu)
+            all_f1_scores.append(f1_score)
             #compare predicted and label with bleu
+
+    print("avg bleu", np.mean(all_blues))
+    print("avg f1 score", np.mean(all_f1_scores))
 
 
 def run():
     parser = ArgumentParser()
     parser.add_argument("--dataset_path", type=str, default="",
                         help="Path or url of the dataset. If empty download from S3.")
-    parser.add_argument("--model", type=str, default="gpt", help="Model type (gpt or gpt2)")
+    parser.add_argument("--model", type=str, default="openai-gpt", help="Model type (gpt or gpt2)")
     parser.add_argument("--dataset_cache", type=str, default='./dataset_cache', help="Path or url of the dataset cache")
-    parser.add_argument("--model_checkpoint", type=str, default="", help="Path, url or short name of the model")
+    parser.add_argument("--model_checkpoint", type=str, default="/home/rohola/codes/transfer-learning-conv-ai/logs/logs1", help="Path, url or short name of the model")
     parser.add_argument("--max_history", type=int, default=2, help="Number of previous utterances to keep in history")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu",
                         help="Device (cuda or cpu)")
@@ -169,25 +181,10 @@ def run():
     model.to(args.device)
     model.eval()
 
-    logger.info("Sample a personality")
     dataset = get_dataset(tokenizer, args.dataset_path, args.dataset_cache)
 
-
-    calculate_bleu(args, model, tokenizer, dataset)
-
-    # history = []
-    # while True:
-    #     raw_text = input(">>> ")
-    #     while not raw_text:
-    #         print('Prompt should not be empty!')
-    #         raw_text = input(">>> ")
-    #     history.append(tokenizer.encode(raw_text))
-    #     with torch.no_grad():
-    #         out_ids = sample_sequence(personality, history, tokenizer, model, args)
-    #     history.append(out_ids)
-    #     history = history[-(2 * args.max_history + 1):]
-    #     out_text = tokenizer.decode(out_ids, skip_special_tokens=True)
-    #     print(out_text)
+    special_tokens = ["<bos>", "<eos>", "<speaker1>", "<speaker2>", "<pad>"]
+    calculate_metrics(args, model, tokenizer, dataset, special_tokens)
 
 
 if __name__ == "__main__":

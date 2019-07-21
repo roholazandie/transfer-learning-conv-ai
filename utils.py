@@ -11,6 +11,8 @@ import re
 import torch
 
 from pytorch_pretrained_bert import cached_path
+from collections import Counter
+
 try:
     from nltk.translate import bleu_score as nltkbleu
 except ImportError:
@@ -83,6 +85,37 @@ def get_dataset(tokenizer, dataset_path, dataset_cache=None):
             torch.save(dataset, dataset_cache)
     return dataset
 
+
+
+def get_dataset_for_daily_dialog(tokenizer, dataset_path, dataset_cache=None, special_tokens=None):
+    """ Get PERSONACHAT from S3 """
+    dataset_path = dataset_path or PERSONACHAT_URL
+    dataset_cache = dataset_cache + '_' + type(tokenizer).__name__  # Do avoid using GPT cache for GPT-2 and vice-versa
+    if dataset_cache and os.path.isfile(dataset_cache):
+        logger.info("Load tokenized dataset from cache at %s", dataset_cache)
+        dataset = torch.load(dataset_cache)
+    else:
+        logger.info("Download dataset from %s", dataset_path)
+        personachat_file = cached_path(dataset_path)
+        with open(personachat_file, "r", encoding="utf-8") as f:
+            dataset = json.loads(f.read())
+
+        logger.info("Tokenize and encode the dataset")
+        def tokenize(obj):
+            if isinstance(obj, str):
+                if obj in special_tokens:
+                    return tokenizer.convert_tokens_to_ids(obj)
+                else:
+                    return tokenizer.convert_tokens_to_ids(tokenizer.tokenize(obj))
+            if isinstance(obj, dict):
+                return dict((n, tokenize(o)) for n, o in obj.items())
+            return list(tokenize(o) for o in obj)
+        dataset = tokenize(dataset)
+        if dataset_cache:
+            torch.save(dataset, dataset_cache)
+    return dataset
+
+
 def get_dataset_personalities(tokenizer, dataset_path, dataset_cache=None):
     """ Get personalities from PERSONACHAT """
     dataset_path = dataset_path or PERSONACHAT_URL
@@ -114,6 +147,38 @@ def get_dataset_personalities(tokenizer, dataset_path, dataset_cache=None):
 
     logger.info("Gathered {} personalities".format(len(personalities)))
     return personalities
+
+
+
+def _prec_recall_f1_score(pred_items, gold_items):
+    """
+    Compute precision, recall and f1 given a set of gold and prediction items.
+
+    :param pred_items: iterable of predicted values
+    :param gold_items: iterable of gold values
+
+    :return: tuple (p, r, f1) for precision, recall, f1
+    """
+    common = Counter(gold_items) & Counter(pred_items)
+    num_same = sum(common.values())
+    if num_same == 0:
+        return 0, 0, 0
+    precision = 1.0 * num_same / len(pred_items)
+    recall = 1.0 * num_same / len(gold_items)
+    f1 = (2 * precision * recall) / (precision + recall)
+    return precision, recall, f1
+
+
+
+def _f1_score(guess, answers):
+    """Return the max F1 score between the guess and *any* answer."""
+    if guess is None or answers is None:
+        return 0
+    g_tokens = normalize_answer(guess).split()
+    scores = [
+        _prec_recall_f1_score(g_tokens, normalize_answer(a).split())for a in answers
+    ]
+    return max(f1 for p, r, f1 in scores)
 
 
 def _bleu(guess, answers):

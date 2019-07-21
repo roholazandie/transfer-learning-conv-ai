@@ -16,16 +16,13 @@ from ignite.handlers import ModelCheckpoint
 from ignite.metrics import Accuracy, Loss, MetricsLambda, RunningAverage
 from ignite.contrib.handlers import ProgressBar, PiecewiseLinear
 from ignite.contrib.handlers.tensorboard_logger import TensorboardLogger, OutputHandler, OptimizerParamsHandler
-from pytorch_pretrained_bert import (OpenAIAdam, OpenAIGPTTokenizer,
-                                     GPT2DoubleHeadsModel, GPT2Tokenizer, WEIGHTS_NAME, CONFIG_NAME
-                                     )
-from pytorch_pretrained_bert.modeling_openai_modified import OpenAIGPTDoubleHeadsModel
-
+from pytorch_pretrained_bert import (WEIGHTS_NAME, CONFIG_NAME, BertTokenizer, BertAdam)
+#from pytorch_pretrained_bert.modeling import BertOpenAIDoubleHeadsModel
 from utils import get_dataset
 
-SPECIAL_TOKENS = ["<bos>", "<eos>", "<speaker1>", "<speaker2>", "<pad>"]
-MODEL_INPUTS = ["persona_ids", "history_ids", "reply_ids", "mc_token_ids", "lm_labels", "mc_labels", "history_token_type"]
-PADDED_INPUTS = ["persona_ids", "history_ids", "reply_ids", "lm_labels", "history_token_type"]
+SPECIAL_TOKENS = ["[BOS]", "[EOS]", "[SPEAKER1]", "[SPEAKER2]", "[PAD]"]
+MODEL_INPUTS = ["input_ids", "mc_token_ids", "lm_labels", "mc_labels", "token_type_ids", "input_mask"]
+PADDED_INPUTS = ["input_ids", "lm_labels", "token_type_ids", "input_mask"]
 
 logger = logging.getLogger(__file__)
 
@@ -40,11 +37,15 @@ def average_distributed_scalar(scalar, args):
 
 def pad_dataset(dataset, padding=0):
     """ Pad the dataset. This could be optimized by defining a Dataset class and padd only batches but this is simpler. """
-    max_l = max([max(len(x) for x in dataset["persona_ids"]),
-             max(len(x) for x in dataset["history_ids"]),
-             max(len(x) for x in dataset["reply_ids"])])
+    max_l = max(len(x) for x in dataset["input_ids"])
     for name in PADDED_INPUTS:
-        dataset[name] = [x + [padding if name != "lm_labels" else -1] * (max_l - len(x)) for x in dataset[name]]
+        if name == "lm_labels":
+            dataset[name] = [x + [-1] * (max_l - len(x)) for x in dataset[name]]
+        elif name == "input_mask":
+            dataset[name] = [x + [0] * (max_l - len(x)) for x in dataset[name]]
+        else:
+            dataset[name] = [x + [padding] * (max_l - len(x)) for x in dataset[name]]
+
     return dataset
 
 
@@ -52,37 +53,40 @@ def build_input_from_segments(persona, history, reply, tokenizer, lm_labels=Fals
     """ Build a sequence of input from 3 segments: persona, history and last reply """
     bos, eos, speaker1, speaker2 = tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS[:-1])
 
+    #todo rooh, in bert embedding we have separate embeddings for token_type_ids, input_ids and
+    # position so there shouldn't be any problem
+    speaker1 = 0
+    speaker2 = 1
+
     instance = {}
-    #sequence = [[bos] + list(chain(*persona))] + history + [reply + ([eos] if with_eos else [])] #seq = [personas, history, reply] concatenate all persona sentences
-    #sequence = [sequence[0]] + [[speaker2 if (len(sequence)-i) % 2 else speaker1] + s for i, s in enumerate(sequence[1:])]
+    sequence = [[bos] + list(chain(*persona))] + history + [reply + ([eos] if with_eos else [])] #seq = [personas, history, reply] concatenate all persona sentences
+    sequence = [sequence[0]] + [[speaker2 if (len(sequence)-i) % 2 else speaker1] + s for i, s in enumerate(sequence[1:])]
 
-    instance["persona_ids"] = [bos] + list(chain(*persona)) + [eos]
-    instance["history_ids"] = [bos] + list(chain(*history)) + [eos]
-    instance["reply_ids"] = [bos] + reply + [eos]
-    instance["history_token_type"] = [speaker2 if i % 2 else speaker1 for i, s in enumerate(history) for _ in s]
-
-    #instance["token_type_ids"] = [speaker2 if i % 2 else speaker1 for i, s in enumerate(sequence) for _ in s] # the last for is for repeating the speaker1 and speaker2 for all tokens
-    instance["mc_token_ids"] = len(instance["reply_ids"]+instance["history_ids"]+instance["persona_ids"]) - 1
-    instance["lm_labels"] = [-1] * len(instance["reply_ids"])
+    instance["input_ids"] = list(chain(*sequence))
+    instance["token_type_ids"] = [speaker2 if i % 2 else speaker1 for i, s in enumerate(sequence) for _ in s] # the last for is for repeating the speaker1 and speaker2 for all tokens
+    instance["mc_token_ids"] = len(instance["input_ids"]) - 1
+    instance["lm_labels"] = [-1] * len(instance["input_ids"])
+    instance["input_mask"] = [1] * len(instance["input_ids"])
     if lm_labels:
-        instance["lm_labels"] = instance["reply_ids"]
-    return instance, None
+        instance["lm_labels"] = ([-1] * sum(len(s) for s in sequence[:-1])) + [-1] + sequence[-1][1:] #all -1 except for reply, reply is just the ids
+    return instance, sequence
 
 
 def get_data_loaders(args, tokenizer):
     """ Prepare the dataset for training and evaluation """
     personachat = get_dataset(tokenizer, args.dataset_path, args.dataset_cache)
 
-    #todo remove soon
-    # personachat["train"] = personachat["train"][:500]
-    # personachat["valid"] = personachat["valid"][:100]
+    # todo remove soon
+    personachat["train"] = personachat["train"][:1000]
+    personachat["valid"] = personachat["valid"][:100]
+
 
     logger.info("Build inputs and labels")
     datasets = {"train": defaultdict(list), "valid": defaultdict(list)}
     for dataset_name, dataset in personachat.items():
         num_candidates = len(dataset[0]["utterances"][0]["candidates"])
         if args.num_candidates > 0 and dataset_name == 'train':
-            num_candidates = min(args.num_candidates, num_candidates)
+            num_candidates = min(args.num_candidates, num_candidates) #for training we use 2 candidates but for validation 20
         for dialog in dataset:
             persona = dialog["personality"].copy()
             for _ in range(args.personality_permutations):
@@ -100,7 +104,7 @@ def get_data_loaders(args, tokenizer):
     logger.info("Pad inputs and convert to Tensor")
     tensor_datasets = {"train": [], "valid": []}
     for dataset_name, dataset in datasets.items():
-        dataset = pad_dataset(dataset, padding=tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS[-1]))
+        dataset = pad_dataset(dataset, padding=tokenizer.convert_tokens_to_ids([SPECIAL_TOKENS[-1]])[0])
         for input_name in MODEL_INPUTS:
             tensor = torch.tensor(dataset[input_name])
             if input_name != "mc_labels":
@@ -123,24 +127,27 @@ def train():
     parser = ArgumentParser()
     parser.add_argument("--dataset_path", type=str, default="", help="Path or url of the dataset. If empty download from S3.")
     parser.add_argument("--dataset_cache", type=str, default='./dataset_cache', help="Path or url of the dataset cache")
-    #parser.add_argument("--model_checkpoint", type=str, default="/home/rohola/codes/transfer-learning-conv-ai/runs/Jun18_10-40-49_rohola-pc", help="Path, url or short name of the model")
-    parser.add_argument("--model_checkpoint", type=str, default="openai-gpt", help="Path, url or short name of the model")
+    parser.add_argument("--model_checkpoint", type=str, default="/home/rohola/codes/transfer-learning-conv-ai/model/bert_base_uncased", help="Path, url or short name of the model")
+    #parser.add_argument("--model_checkpoint", type=str, default="/home/rohola/codes/transfer-learning-conv-ai/logs/logs4", help="Path, url or short name of the model")
+    #parser.add_argument("--model_checkpoint", type=str, default="bert-base-uncased", help="Path, url or short name of the model")
     parser.add_argument("--num_candidates", type=int, default=2, help="Number of candidates for training")
+    parser.add_argument("--do_lower_case", default='True', action='store_true')
     parser.add_argument("--max_history", type=int, default=2, help="Number of previous exchanges to keep in history")
-    parser.add_argument("--train_batch_size", type=int, default=2, help="Batch size for training")
+    parser.add_argument("--train_batch_size", type=int, default=3, help="Batch size for training")
     parser.add_argument("--valid_batch_size", type=int, default=1, help="Batch size for validation")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=8, help="Accumulate gradients on several steps")
-    parser.add_argument("--lr", type=float, default=6.25e-5, help="Learning rate")
+    parser.add_argument("--lr", type=float, default=5e-5, help="Learning rate")
+    parser.add_argument("--warmup_proportion", type=float, default=0.1, help="Warmup Proportion")
     parser.add_argument("--lm_coef", type=float, default=1.0, help="LM loss coefficient")
     parser.add_argument("--mc_coef", type=float, default=1.0, help="Multiple-choice loss coefficient")
     parser.add_argument("--max_norm", type=float, default=1.0, help="Clipping gradient norm")
-    parser.add_argument("--n_epochs", type=int, default=20, help="Number of training epochs")
+    parser.add_argument("--n_epochs", type=int, default=4, help="Number of training epochs")
     parser.add_argument("--personality_permutations", type=int, default=1, help="Number of permutations of personality sentences")
     parser.add_argument("--eval_before_start", action='store_true', help="If true start with a first evaluation before training")
     parser.add_argument("--device", type=str, default="cuda:0" if torch.cuda.is_available() else "cpu", help="Device (cuda or cpu)")
     parser.add_argument("--fp16", type=str, default="", help="Set to O0, O1, O2 or O3 for fp16 training (see apex documentation)")
     parser.add_argument("--local_rank", type=int, default=-1, help="Local rank for distributed training (-1: not distributed)")
-    parser.add_argument("--log_dir", type=str, default="", help="Local rank for distributed training (-1: not distributed)")
+    parser.add_argument("--log_dir", type=str, default="/home/rohola/codes/transfer-learning-conv-ai/logs/logs7", help="Local rank for distributed training (-1: not distributed)")
     args = parser.parse_args()
 
     # logging is set to INFO (resp. WARN) for main (resp. auxiliary) process. logger.info => log main process only, logger.warning => log all processes
@@ -157,14 +164,11 @@ def train():
         torch.distributed.init_process_group(backend='nccl', init_method='env://')
 
     logger.info("Prepare tokenizer, pretrained model and optimizer - add special tokens for fine-tuning")
-    tokenizer_class = GPT2Tokenizer if "gpt2" in args.model_checkpoint else OpenAIGPTTokenizer
-    tokenizer = tokenizer_class.from_pretrained(args.model_checkpoint)
-    model_class = GPT2DoubleHeadsModel if "gpt2" in args.model_checkpoint else OpenAIGPTDoubleHeadsModel
-    model = model_class.from_pretrained(args.model_checkpoint)
-    tokenizer.set_special_tokens(SPECIAL_TOKENS)
-    model.set_num_special_tokens(len(SPECIAL_TOKENS))
+    tokenizer = BertTokenizer.from_pretrained(args.model_checkpoint, do_lower_case=args.do_lower_case)
+    model = BertOpenAIDoubleHeadsModel.from_pretrained(args.model_checkpoint)
     model.to(args.device)
-    optimizer = OpenAIAdam(model.parameters(), lr=args.lr)
+    optimizer = BertAdam(model.parameters(), lr=args.lr, warmup=args.warmup_proportion)
+
 
     # Prepare model for FP16 and distributed training if needed (order is important, distributed should be the last)
     if args.fp16:
@@ -177,11 +181,13 @@ def train():
     train_loader, val_loader, train_sampler, valid_sampler = get_data_loaders(args, tokenizer)
     # Training function and trainer
 
+
+
     def update(engine, batch):
         model.train()
         batch = tuple(input_tensor.to(args.device) for input_tensor in batch)
-        #persona_ids, history_ids, reply_ids, mc_token_ids, lm_labels, mc_labels, history_token_type = batch
-        lm_loss, mc_loss = model(*batch)
+        input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids, input_mask = batch
+        lm_loss, mc_loss = model(input_ids, mc_token_ids, input_mask, lm_labels, mc_labels, token_type_ids)
         loss = (lm_loss * args.lm_coef + mc_loss * args.mc_coef) / args.gradient_accumulation_steps
         if args.fp16:
             with amp.scale_loss(loss, optimizer) as scaled_loss:
@@ -202,18 +208,15 @@ def train():
         model.eval()
         with torch.no_grad():
             batch = tuple(input_tensor.to(args.device) for input_tensor in batch)
-            #input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids = batch
-            persona_ids, history_ids, reply_ids, mc_token_ids, lm_labels, mc_labels, history_token_type = batch
-            #logger.info(tokenizer.decode(input_ids[0, -1, :].tolist()))
-            #model_outputs = model(input_ids, mc_token_ids, token_type_ids=token_type_ids, past=engine.state.past)
-            model_outputs = model(persona_ids, history_ids, reply_ids, mc_token_ids, history_token_type=history_token_type)
+            input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids, input_mask = batch
+            model_outputs = model(input_ids, mc_token_ids, input_mask, token_type_ids=token_type_ids)
             lm_logits, mc_logits = model_outputs[0], model_outputs[1]
-            #engine.state.presents = presents
             lm_logits_flat_shifted = lm_logits[..., :-1, :].contiguous().view(-1, lm_logits.size(-1))
             lm_labels_flat_shifted = lm_labels[..., 1:].contiguous().view(-1)
             return (lm_logits_flat_shifted, mc_logits), (lm_labels_flat_shifted, mc_labels)
 
     evaluator = Engine(inference)
+
 
     # Attach evaluation to trainer: we evaluate when we start the training and at the end of each epoch
     trainer.add_event_handler(Events.EPOCH_COMPLETED, lambda _: evaluator.run(val_loader))

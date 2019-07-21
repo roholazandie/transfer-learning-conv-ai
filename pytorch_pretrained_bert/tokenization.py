@@ -130,6 +130,7 @@ class BertTokenizer(object):
             )
         return ids
 
+
     def convert_ids_to_tokens(self, ids):
         """Converts a sequence of ids in wordpiece tokens using the vocab."""
         tokens = []
@@ -151,6 +152,21 @@ class BertTokenizer(object):
                 writer.write(token + u'\n')
                 index += 1
         return vocab_file
+
+    def encode(self, text):
+        return self.convert_tokens_to_ids(self.tokenize(text))
+
+    def decode(self, tokens, skip_special_tokens=False, clean_up_tokenization_spaces=True):
+        text = ' '.join(self.convert_ids_to_tokens(tokens))
+        if clean_up_tokenization_spaces:
+            text = text.replace('<unk>', '')
+            text = text.replace(' .', '.').replace(' ?', '?').replace(' !', '!').replace(' ,', ','
+                                                                                         ).replace(" ' ", "'").replace(
+                " n't", "n't").replace(" 'm", "'m").replace(" do not", " don't"
+                                                            ).replace(" 's", "'s").replace(" 've", "'ve").replace(
+                " 're", "'re")
+        return text
+
 
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path, cache_dir=None, *inputs, **kwargs):

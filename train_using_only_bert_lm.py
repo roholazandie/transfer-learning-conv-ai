@@ -18,7 +18,7 @@ from ignite.contrib.handlers import ProgressBar, PiecewiseLinear
 from ignite.contrib.handlers.tensorboard_logger import TensorboardLogger, OutputHandler, OptimizerParamsHandler
 from pytorch_pretrained_bert import (OpenAIAdam, OpenAIGPTDoubleHeadsModel, OpenAIGPTTokenizer,
                                      GPT2DoubleHeadsModel, GPT2Tokenizer, WEIGHTS_NAME, CONFIG_NAME
-, BertModel, BertTokenizer, BertAdam)
+, BertModel, BertTokenizer, BertAdam, BertForMaskedLM)
 from pytorch_pretrained_bert.modeling import BertDoubleHeadsModel
 from utils import get_dataset
 
@@ -79,8 +79,8 @@ def get_data_loaders(args, tokenizer):
     personachat = get_dataset(tokenizer, args.dataset_path, args.dataset_cache)
 
     # todo remove soon
-    personachat["train"] = personachat["train"][:1000]
-    personachat["valid"] = personachat["valid"][:100]
+    # personachat["train"] = personachat["train"][:500]
+    # personachat["valid"] = personachat["valid"][:100]
 
 
     logger.info("Build inputs and labels")
@@ -129,8 +129,7 @@ def train():
     parser = ArgumentParser()
     parser.add_argument("--dataset_path", type=str, default="", help="Path or url of the dataset. If empty download from S3.")
     parser.add_argument("--dataset_cache", type=str, default='./dataset_cache', help="Path or url of the dataset cache")
-    parser.add_argument("--model_checkpoint", type=str, default="/home/rohola/codes/transfer-learning-conv-ai/model/bert_large_uncased", help="Path, url or short name of the model")
-    #parser.add_argument("--model_checkpoint", type=str, default="/home/rohola/codes/transfer-learning-conv-ai/logs/logs4", help="Path, url or short name of the model")
+    parser.add_argument("--model_checkpoint", type=str, default="/home/rohola/codes/transfer-learning-conv-ai/model/bert_base_uncased", help="Path, url or short name of the model")
     #parser.add_argument("--model_checkpoint", type=str, default="bert-base-uncased", help="Path, url or short name of the model")
     parser.add_argument("--num_candidates", type=int, default=2, help="Number of candidates for training")
     parser.add_argument("--do_lower_case", default='True', action='store_true')
@@ -140,8 +139,8 @@ def train():
     parser.add_argument("--gradient_accumulation_steps", type=int, default=8, help="Accumulate gradients on several steps")
     parser.add_argument("--lr", type=float, default=5e-5, help="Learning rate")
     parser.add_argument("--warmup_proportion", type=float, default=0.1, help="Warmup Proportion")
-    parser.add_argument("--lm_coef", type=float, default=1.0, help="LM loss coefficient")
-    parser.add_argument("--mc_coef", type=float, default=1.0, help="Multiple-choice loss coefficient")
+    # parser.add_argument("--lm_coef", type=float, default=1.0, help="LM loss coefficient")
+    # parser.add_argument("--mc_coef", type=float, default=0.0, help="Multiple-choice loss coefficient")
     parser.add_argument("--max_norm", type=float, default=1.0, help="Clipping gradient norm")
     parser.add_argument("--n_epochs", type=int, default=4, help="Number of training epochs")
     parser.add_argument("--personality_permutations", type=int, default=1, help="Number of permutations of personality sentences")
@@ -167,7 +166,7 @@ def train():
 
     logger.info("Prepare tokenizer, pretrained model and optimizer - add special tokens for fine-tuning")
     tokenizer = BertTokenizer.from_pretrained(args.model_checkpoint, do_lower_case=args.do_lower_case)
-    model = BertDoubleHeadsModel.from_pretrained(args.model_checkpoint)
+    model = BertForMaskedLM.from_pretrained(args.model_checkpoint)
     model.to(args.device)
     optimizer = BertAdam(model.parameters(), lr=args.lr, warmup=args.warmup_proportion)
 
@@ -189,10 +188,8 @@ def train():
         model.train()
         batch = tuple(input_tensor.to(args.device) for input_tensor in batch)
         input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids, input_mask = batch
-        lm_loss, mc_loss = model(input_ids, mc_token_ids, input_mask, lm_labels, mc_labels, token_type_ids)
-        loss = (lm_loss * args.lm_coef + mc_loss * args.mc_coef) / args.gradient_accumulation_steps
-        #mc_loss = model(input_ids, mc_token_ids, input_mask, lm_labels=None, mc_labels=mc_labels, token_type_ids=token_type_ids)
-        #loss = mc_loss[0] / args.gradient_accumulation_steps
+        lm_loss = model(input_ids, token_type_ids, input_mask, lm_labels)
+        loss = (lm_loss) / args.gradient_accumulation_steps
         if args.fp16:
             with amp.scale_loss(loss, optimizer) as scaled_loss:
                 scaled_loss.backward()
@@ -213,12 +210,12 @@ def train():
         with torch.no_grad():
             batch = tuple(input_tensor.to(args.device) for input_tensor in batch)
             input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids, input_mask = batch
-            model_outputs = model(input_ids, mc_token_ids, input_mask, token_type_ids=token_type_ids)
-            lm_logits, mc_logits = model_outputs[0], model_outputs[1]
+            lm_logits = model(input_ids, token_type_ids, input_mask)
             lm_logits_flat_shifted = lm_logits[..., :-1, :].contiguous().view(-1, lm_logits.size(-1))
             lm_labels_flat_shifted = lm_labels[..., 1:].contiguous().view(-1)
             #loss_fct = torch.nn.CrossEntropyLoss(ignore_index=-1)
             #l = loss_fct(lm_logits_flat_shifted, lm_labels_flat_shifted)
+            mc_logits = torch.rand([1,20])
             return (lm_logits_flat_shifted, mc_logits), (lm_labels_flat_shifted, mc_labels)
 
     evaluator = Engine(inference)
@@ -243,7 +240,7 @@ def train():
     # Prepare metrics - note how we compute distributed metrics
     RunningAverage(output_transform=lambda x: x).attach(trainer, "loss")
     metrics = {"nll": Loss(torch.nn.CrossEntropyLoss(ignore_index=-1), output_transform=lambda x: (x[0][0], x[1][0])),
-               "accuracy": Accuracy(output_transform=lambda x: (x[0][1], x[1][1]))}
+               "accuracy": Accuracy(output_transform=lambda x: (x[0][0], x[1][0]))}
     metrics.update({"average_nll": MetricsLambda(average_distributed_scalar, metrics["nll"], args),
                     "average_accuracy": MetricsLambda(average_distributed_scalar, metrics["accuracy"], args)})
     metrics["average_ppl"] = MetricsLambda(math.exp, metrics["average_nll"])
