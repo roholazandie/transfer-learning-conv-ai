@@ -98,6 +98,7 @@ def calculate_metrics(args, model, tokenizer, dataset, special_tokens):
         #utterance = utterances[-1] #only the longest conversaion
 
         for utterance in utterances:
+
             true_label = utterance['candidates'][-1]
             history = utterance['history']
 
@@ -129,14 +130,18 @@ def calculate_metrics(args, model, tokenizer, dataset, special_tokens):
 
             predicted_sentence = tokenizer.decode(predicted_output, skip_special_tokens=True)
             true_sentence = tokenizer.decode(true_label, skip_special_tokens=True)
-            bleu = _bleu(predicted_sentence, [true_sentence])
+            #looks like zero gives the best results
+            bleus = [_bleu(predicted_sentence, [true_sentence], method="method"+str(i)) for i in [0,1,2,3,5]]
+            #bleu = _bleu(predicted_sentence, [true_sentence])
             f1_score = _f1_score(predicted_sentence, [true_sentence])
             #print(f1_score)
-            all_blues.append(bleu)
+            all_blues.append(bleus)
             all_f1_scores.append(f1_score)
             #compare predicted and label with bleu
 
-    print("avg bleu", np.mean(all_blues))
+
+
+    print("avg bleu", np.array(all_blues).mean(axis=0))
     print("avg f1 score", np.mean(all_f1_scores))
 
 

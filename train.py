@@ -60,8 +60,7 @@ def build_input_from_segments(persona, history, reply, tokenizer, SPECIAL_TOKENS
     instance["mc_token_ids"] = len(instance["input_ids"]) - 1
     instance["lm_labels"] = [-1] * len(instance["input_ids"])
     if lm_labels:
-        instance["lm_labels"] = ([-1] * sum(len(s) for s in sequence[:-1])) + [-1] + sequence[-1][
-                                                                                     1:]  # all -1 except for reply, reply is just the ids
+        instance["lm_labels"] = ([-1] * sum(len(s) for s in sequence[:-1])) + [-1] + sequence[-1][1:]  # all -1 except for reply, reply is just the ids
     return instance, sequence
 
 
@@ -70,8 +69,8 @@ def get_data_loaders(args, tokenizer):
     personachat = get_dataset(tokenizer, args.dataset_path, args.dataset_cache)
 
     # todo remove soon
-    personachat["train"] = personachat["train"][:1000]
-    personachat["valid"] = personachat["valid"][:100]
+    # personachat["train"] = personachat["train"][:1000]
+    # personachat["valid"] = personachat["valid"][:100]
 
     logger.info("Build inputs and labels")
     datasets = {"train": defaultdict(list), "valid": defaultdict(list)}

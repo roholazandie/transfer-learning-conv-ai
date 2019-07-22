@@ -13,10 +13,10 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, TensorDataset
 from ignite.engine import Engine, Events
 from ignite.handlers import ModelCheckpoint
-from ignite.metrics import Accuracy, Loss, MetricsLambda, RunningAverage
+from ignite.metrics import Accuracy, Loss, MetricsLambda, RunningAverage, Precision, ConfusionMatrix
 from ignite.contrib.handlers import ProgressBar, PiecewiseLinear
 from ignite.contrib.handlers.tensorboard_logger import TensorboardLogger, OutputHandler, OptimizerParamsHandler
-from pytorch_pretrained_bert import (OpenAIAdam, OpenAIGPTDoubleHeadsModel, OpenAIGPTTokenizer,
+from pytorch_pretrained_bert import (OpenAIAdam, OpenAIGPTMultiHeadModel, OpenAIGPTTokenizer,
                                      GPT2DoubleHeadsModel, GPT2Tokenizer, WEIGHTS_NAME, CONFIG_NAME,
                                      BertModel, BertTokenizer)
 
@@ -48,7 +48,25 @@ def pad_dataset(dataset, padding=0):
     return dataset
 
 
-def build_input_from_segments(history, emotions,  reply, candidate_emotion,  tokenizer, lm_labels=False, with_eos=True):
+def get_emotion_label(tokenizer, candidate_emotion):
+    _, _, _, _, no_emotion_id, happiness_id, surprise_id, sadness_id, disgust_id, anger_id, fear_id, _, _, _, _, _ = tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS)
+    if candidate_emotion == no_emotion_id:
+        return 0
+    elif candidate_emotion == happiness_id:
+        return 1
+    elif candidate_emotion == surprise_id:
+        return 2
+    elif candidate_emotion == sadness_id:
+        return 3
+    elif candidate_emotion == disgust_id:
+        return 4
+    elif candidate_emotion == anger_id:
+        return 5
+    elif candidate_emotion == fear_id:
+        return 6
+
+
+def build_input_from_segments(history, emotions, reply, true_emotion, tokenizer, with_eos=True):
     """ Build a sequence of input from 3 segments: persona, history and last reply """
     bos, eos, speaker1, speaker2 = tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS[:4])
 
@@ -58,12 +76,11 @@ def build_input_from_segments(history, emotions,  reply, candidate_emotion,  tok
 
     instance["input_ids"] = list(chain(*sequence))
     instance["token_type_ids"] = [speaker2 if i % 2 else speaker1 for i, s in enumerate(sequence) for _ in s] # the last for is for repeating the speaker1 and speaker2 for all tokens
-    instance["token_emotion_ids"] = [emotions[i] for i, s in enumerate(sequence[:-1]) for _ in s]+[candidate_emotion]*len(sequence[-1])
+    instance["token_emotion_ids"] = [emotions[i] for i, s in enumerate(sequence[:-1]) for _ in s] + [true_emotion] * len(sequence[-1])
 
     instance["mc_token_ids"] = len(instance["input_ids"]) - 1
-    instance["lm_labels"] = [-1] * len(instance["input_ids"])
-    if lm_labels:
-        instance["lm_labels"] = ([-1] * sum(len(s) for s in sequence[:-1])) + [-1] + sequence[-1][1:] #all -1 except for reply, reply is just the ids
+    instance["mc_labels"] = get_emotion_label(tokenizer, true_emotion)
+    instance["lm_labels"] = ([-1] * sum(len(s) for s in sequence[:-1])) + [-1] + sequence[-1][1:] #all -1 except for reply, reply is just the ids
     return instance, sequence
 
 
@@ -71,9 +88,8 @@ def get_data_loaders(args, tokenizer):
     """ Prepare the dataset for training and evaluation """
     personachat = get_dataset_for_daily_dialog(tokenizer, args.dataset_path, args.dataset_cache, SPECIAL_TOKENS)
 
-    personachat["train"] = personachat["train"][:100]
-    personachat["valid"] = personachat["valid"][:10]
-
+    # personachat["train"] = personachat["train"][:100]
+    # personachat["valid"] = personachat["valid"][:10]
 
     logger.info("Build inputs and labels")
     datasets = {"train": defaultdict(list), "valid": defaultdict(list)}
@@ -86,20 +102,29 @@ def get_data_loaders(args, tokenizer):
             for utterance in dialog["utterances"]:
                 history = utterance["history"][-(2*args.max_history+1):]
                 emotions = utterance["emotion"][-(2 * args.max_history + 1):]
-                for j, candidate in enumerate(utterance["candidates"][-num_candidates:]):
-                    lm_labels = bool(j == num_candidates-1) #the true label is always the last one in list of candidates
-                    candidate_emotion = utterance['candidates_emotions'][j]
-                    instance, _ = build_input_from_segments(history, emotions, candidate, candidate_emotion, tokenizer, lm_labels)
-                    #print(len(instance["input_ids"]))
-                    if len(instance["input_ids"]) > 310:
-                        truncated_history = [hist[:10] for hist in history]
-                        truncated_candidate = candidate[:10]
-                        instance, _ = build_input_from_segments(truncated_history, emotions, truncated_candidate, candidate_emotion, tokenizer, lm_labels)
-                        c+=1
+                reply = utterance["candidates"][-1]
+                true_emotion = utterance['candidates_emotions'][-1]
+                instance, _ = build_input_from_segments(history,
+                                                        emotions,
+                                                        reply,
+                                                        true_emotion,
+                                                        tokenizer)
 
-                    for input_name, input_array in instance.items():
-                        datasets[dataset_name][input_name].append(input_array)
-                datasets[dataset_name]["mc_labels"].append(num_candidates - 1)
+                if len(instance["input_ids"]) > 310:
+                    truncated_history = [hist[:10] for hist in history]
+                    truncated_candidate = reply[:10]
+                    true_emotion = utterance['candidates_emotions'][-1]
+                    instance, _ = build_input_from_segments(truncated_history,
+                                                            emotions,
+                                                            truncated_candidate,
+                                                            true_emotion,
+                                                            tokenizer)
+                    c+=1
+
+                for input_name, input_array in instance.items():
+                    datasets[dataset_name][input_name].append(input_array)
+
+                #datasets[dataset_name]["mc_labels"].append(num_candidates - 1)
                 datasets[dataset_name]["n_candidates"] = num_candidates
     print(c)
     logger.info("Pad inputs and convert to Tensor")
@@ -108,8 +133,8 @@ def get_data_loaders(args, tokenizer):
         dataset = pad_dataset(dataset, padding=tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS[-1]))
         for input_name in MODEL_INPUTS:
             tensor = torch.tensor(dataset[input_name])
-            if input_name != "mc_labels":
-                tensor = tensor.view((-1, datasets[dataset_name]["n_candidates"]) + tensor.shape[1:])
+            #if input_name != "mc_labels":
+            #    tensor = tensor.view((-1, datasets[dataset_name]["n_candidates"]) + tensor.shape[1:])
             tensor_datasets[dataset_name].append(tensor)
 
     logger.info("Build train and validation dataloaders")
@@ -131,8 +156,8 @@ def train():
     parser.add_argument("--model_checkpoint", type=str, default="openai-gpt", help="Path, url or short name of the model")
     parser.add_argument("--num_candidates", type=int, default=2, help="Number of candidates for training")
     parser.add_argument("--max_history", type=int, default=2, help="Number of previous exchanges to keep in history")
-    parser.add_argument("--train_batch_size", type=int, default=3, help="Batch size for training")
-    parser.add_argument("--valid_batch_size", type=int, default=3, help="Batch size for validation")
+    parser.add_argument("--train_batch_size", type=int, default=1, help="Batch size for training")
+    parser.add_argument("--valid_batch_size", type=int, default=1, help="Batch size for validation")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=8, help="Accumulate gradients on several steps")
     parser.add_argument("--lr", type=float, default=6.25e-5, help="Learning rate")
     parser.add_argument("--lm_coef", type=float, default=1.0, help="LM loss coefficient")
@@ -162,7 +187,7 @@ def train():
     logger.info("Prepare tokenizer, pretrained model and optimizer - add special tokens for fine-tuning")
     tokenizer_class = GPT2Tokenizer if "gpt2" in args.model_checkpoint else OpenAIGPTTokenizer
     tokenizer = tokenizer_class.from_pretrained(args.model_checkpoint)
-    model_class = GPT2DoubleHeadsModel if "gpt2" in args.model_checkpoint else OpenAIGPTDoubleHeadsModel
+    model_class = GPT2DoubleHeadsModel if "gpt2" in args.model_checkpoint else OpenAIGPTMultiHeadModel
     model = model_class.from_pretrained(args.model_checkpoint)
     tokenizer.set_special_tokens(SPECIAL_TOKENS)
     model.set_num_special_tokens(len(SPECIAL_TOKENS))
@@ -234,6 +259,8 @@ def train():
                "accuracy": Accuracy(output_transform=lambda x: (x[0][1], x[1][1]))}
     metrics.update({"average_nll": MetricsLambda(average_distributed_scalar, metrics["nll"], args),
                     "average_accuracy": MetricsLambda(average_distributed_scalar, metrics["accuracy"], args)})
+
+    metrics.update({"confusion_matrix": ConfusionMatrix(num_classes=7, output_transform=lambda x: (x[0][1], x[1][1]))})
     metrics["average_ppl"] = MetricsLambda(math.exp, metrics["average_nll"])
     for name, metric in metrics.items():
         metric.attach(evaluator, name)

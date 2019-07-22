@@ -862,3 +862,135 @@ class OpenAIGPTDoubleHeadsModel(OpenAIGPTPreTrainedModel):
         if self.transformer.output_attentions:
             return all_attentions, lm_logits, mc_logits
         return lm_logits, mc_logits
+
+
+###############################################################################
+
+
+class OpenAIGPTEmotionChoiceHead(nn.Module):
+    """ Classifier Head for the transformer """
+
+    def __init__(self, config):
+        super(OpenAIGPTEmotionChoiceHead, self).__init__()
+        self.n_embd = config.n_embd
+        self.dropout = nn.Dropout2d(config.resid_pdrop)  # To reproduce the noise_shape parameter of TF implementation
+        num_emotions = 7
+        self.linear = nn.Linear(config.n_embd, num_emotions)
+
+        nn.init.normal_(self.linear.weight, std=0.02)
+        nn.init.normal_(self.linear.bias, 0)
+
+    def forward(self, hidden_states, mc_token_ids):
+        # Classification logits
+        # hidden_state (bsz, seq_length, hidden_size)
+        # mc_token_ids (bsz,)
+        mc_token_ids = mc_token_ids.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, hidden_states.size(-1))
+        # mc_token_ids (bsz, 1, hidden_size)
+        multiple_choice_h = hidden_states.gather(1, mc_token_ids).squeeze(1)
+        # multiple_choice_h (bsz, hidden_size)
+        multiple_choice_h = self.dropout(multiple_choice_h)
+        multiple_choice_logits = self.linear(multiple_choice_h)
+        # (bsz, num_choices)
+        return multiple_choice_logits
+
+
+
+
+
+
+class OpenAIGPTMultiHeadModel(OpenAIGPTPreTrainedModel):
+    """OpenAI GPT model with a Language Modeling and a Multiple Choice head ("Improving Language Understanding by Generative Pre-Training").
+
+    OpenAI GPT use a single embedding matrix to store the word and special embeddings.
+    Special tokens embeddings are additional tokens that are not pre-trained: [SEP], [CLS]...
+    Special tokens need to be trained during the fine-tuning if you use them.
+    The number of special embeddings can be controled using the `set_num_special_tokens(num_special_tokens)` function.
+
+    The embeddings are ordered as follow in the token embeddings matrice:
+        [0,                                                         ----------------------
+         ...                                                        -> word embeddings
+         config.vocab_size - 1,                                     ______________________
+         config.vocab_size,
+         ...                                                        -> special embeddings
+         config.vocab_size + config.n_special - 1]                  ______________________
+
+    where total_tokens_embeddings can be obtained as config.total_tokens_embeddings and is:
+        total_tokens_embeddings = config.vocab_size + config.n_special
+    You should use the associate indices to index the embeddings.
+
+    Params:
+        config: a OpenAIGPTConfig class instance with the configuration to build a new model
+
+    Inputs:
+        `input_ids`: a torch.LongTensor of shape [batch_size, num_choices, sequence_length] with the BPE token
+            indices selected in the range [0, total_tokens_embeddings[
+        `mc_token_ids`: a torch.LongTensor of shape [batch_size, num_choices] with the index of the token from
+            which we should take the hidden state to feed the multiple choice classifier (usually last token of the sequence)
+        `position_ids`: an optional torch.LongTensor with the same shape as input_ids
+            with the position indices (selected in the range [0, config.n_positions - 1[.
+        `token_type_ids`: an optional torch.LongTensor with the same shape as input_ids
+            You can use it to add a third type of embedding to each input token in the sequence
+            (the previous two being the word and position embeddings).
+            The input, position and token_type embeddings are summed inside the Transformer before the first
+            self-attention block.
+        `lm_labels`: optional language modeling labels: torch.LongTensor of shape [batch_size, num_choices, sequence_length]
+            with indices selected in [-1, 0, ..., total_tokens_embeddings]. All labels set to -1 are ignored (masked), the loss
+            is only computed for the labels set in [0, ..., total_tokens_embeddings]
+        `multiple_choice_labels`: optional multiple choice labels: torch.LongTensor of shape [batch_size]
+            with indices selected in [0, ..., num_choices].
+
+    Outputs:
+        if `lm_labels` and `multiple_choice_labels` are not `None`:
+            Outputs a tuple of losses with the language modeling loss and the multiple choice loss.
+        else: a tuple with
+            `lm_logits`: the language modeling logits as a torch.FloatTensor of size [batch_size, num_choices, sequence_length, total_tokens_embeddings]
+            `multiple_choice_logits`: the multiple choice logits as a torch.FloatTensor of size [batch_size, num_choices]
+
+    Example usage:
+    ```python
+    # Already been converted into BPE token ids
+    input_ids = torch.LongTensor([[[31, 51, 99], [15, 5, 0]]])  # (bsz, number of choice, seq length)
+    mc_token_ids = torch.LongTensor([[2], [1]]) # (bsz, number of choice)
+
+    config = modeling_openai.OpenAIGPTConfig()
+
+    model = modeling_openai.OpenAIGPTDoubleHeadsModel(config)
+    lm_logits, multiple_choice_logits = model(input_ids, mc_token_ids)
+    ```
+    """
+
+    def __init__(self, config, output_attentions=False):
+        super(OpenAIGPTMultiHeadModel, self).__init__(config)
+        self.transformer = OpenAIGPTModel(config, output_attentions=output_attentions)
+        self.lm_head = OpenAIGPTLMHead(self.transformer.tokens_embed.weight, config)
+        self.emotion_choice_head = OpenAIGPTEmotionChoiceHead(config)
+        self.apply(self.init_weights)
+
+    def set_num_special_tokens(self, num_special_tokens, predict_special_tokens=True):
+        """ Update input and output embeddings with new embedding matrice
+            Make sure we are sharing the embeddings
+        """
+        self.config.predict_special_tokens = self.transformer.config.predict_special_tokens = predict_special_tokens
+        self.transformer.set_num_special_tokens(num_special_tokens)
+        self.lm_head.set_embeddings_weights(self.transformer.tokens_embed.weight, predict_special_tokens=predict_special_tokens)
+
+    def forward(self, input_ids, mc_token_ids, lm_labels=None, mc_labels=None, token_type_ids=None, token_emotion_ids=None, position_ids=None):
+        hidden_states = self.transformer(input_ids, position_ids, token_type_ids, token_emotion_ids)
+        if self.transformer.output_attentions:
+            all_attentions, hidden_states = hidden_states
+        lm_logits = self.lm_head(hidden_states)
+        mc_logits = self.emotion_choice_head(hidden_states, mc_token_ids)
+        losses = []
+        if lm_labels is not None: # when lm_labels is all -1 it means it's not the correct candidate which in turn means it's a negative example and we ignore it because ignore_index=-1
+            shift_logits = lm_logits[..., :-1, :].contiguous()
+            shift_labels = lm_labels[..., 1:].contiguous()
+            loss_fct = CrossEntropyLoss(ignore_index=-1)
+            losses.append(loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1)))
+        if mc_labels is not None:
+            loss_fct = CrossEntropyLoss()
+            losses.append(loss_fct(mc_logits.view(-1, mc_logits.size(-1)), mc_labels.view(-1)))
+        if losses:
+            return losses
+        if self.transformer.output_attentions:
+            return all_attentions, lm_logits, mc_logits
+        return lm_logits, mc_logits

@@ -181,7 +181,7 @@ def _f1_score(guess, answers):
     return max(f1 for p, r, f1 in scores)
 
 
-def _bleu(guess, answers):
+def _bleu(guess, answers, method=None):
     """Compute approximate BLEU score between guess and a set of answers."""
     if nltkbleu is None:
         # bleu library not installed, just return a default value
@@ -192,10 +192,30 @@ def _bleu(guess, answers):
     # going to be slower than fairseq's (which is written in C), but fairseq's
     # requires that everything be in arrays of ints (i.e. as tensors). NLTK's
     # works with strings, which is better suited for this module.
+    if method == "method0":
+        smoothing_func = nltkbleu.SmoothingFunction(epsilon=1e-12).method0
+    elif method == "method1":
+        smoothing_func = nltkbleu.SmoothingFunction(epsilon=1e-12).method1
+    elif method == "method2":
+        smoothing_func = nltkbleu.SmoothingFunction(epsilon=1e-12).method2
+    elif method == "method3":
+        smoothing_func = nltkbleu.SmoothingFunction(epsilon=1e-12).method3
+    elif method == "method4":
+        smoothing_func = nltkbleu.SmoothingFunction(epsilon=1e-12).method4
+    elif method == "method5":
+        smoothing_func = nltkbleu.SmoothingFunction(epsilon=1e-12).method5
+    elif method == "method6":
+        smoothing_func = nltkbleu.SmoothingFunction(epsilon=1e-12).method6
+    elif method == "method7":
+        smoothing_func = nltkbleu.SmoothingFunction(epsilon=1e-12).method7
+    else:
+        smoothing_func = nltkbleu.SmoothingFunction(epsilon=1e-12).method3
+
+
     return nltkbleu.sentence_bleu(
         [normalize_answer(a).split(" ") for a in answers],
         normalize_answer(guess).split(" "),
-        smoothing_function=nltkbleu.SmoothingFunction(epsilon=1e-12).method3,
+        smoothing_function=smoothing_func,
     )
 
 
