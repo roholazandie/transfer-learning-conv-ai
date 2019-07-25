@@ -71,7 +71,8 @@ def build_input_from_segments(history, emotions, reply, true_emotion, tokenizer,
     bos, eos, speaker1, speaker2 = tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS[:4])
 
     instance = {}
-    sequence = [[bos] + history[0] + list(chain(*history[1:]))]  + [reply + ([eos] if with_eos else [])] #seq = [personas, history, reply] concatenate all persona sentences
+    # sequence = [[bos] + history[0] + list(chain(*history[1:]))]  + [reply + ([eos] if with_eos else [])] #seq = [personas, history, reply] concatenate all persona sentences
+    sequence = [[bos] + history[0]] + history[1:] + [reply + ([eos] if with_eos else [])]
     sequence = [[speaker2 if (len(sequence)-i) % 2 else speaker1] + s for i, s in enumerate(sequence)]
 
     instance["input_ids"] = list(chain(*sequence))
@@ -88,8 +89,8 @@ def get_data_loaders(args, tokenizer):
     """ Prepare the dataset for training and evaluation """
     personachat = get_dataset_for_daily_dialog(tokenizer, args.dataset_path, args.dataset_cache, SPECIAL_TOKENS)
 
-    # personachat["train"] = personachat["train"][:100]
-    # personachat["valid"] = personachat["valid"][:10]
+    personachat["train"] = personachat["train"][:100]
+    personachat["valid"] = personachat["valid"][:10]
 
     logger.info("Build inputs and labels")
     datasets = {"train": defaultdict(list), "valid": defaultdict(list)}
@@ -208,6 +209,7 @@ def train():
     def update(engine, batch):
         model.train()
         input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids, token_emotion_ids = tuple(input_tensor.to(args.device) for input_tensor in batch)
+        token_emotion_ids = None
         lm_loss, mc_loss = model(input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids, token_emotion_ids)
         loss = (lm_loss * args.lm_coef + mc_loss * args.mc_coef) / args.gradient_accumulation_steps
         if args.fp16:
@@ -229,6 +231,7 @@ def train():
         with torch.no_grad():
             batch = tuple(input_tensor.to(args.device) for input_tensor in batch)
             input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids, token_emotion_ids = batch
+            token_emotion_ids = None
             #logger.info(tokenizer.decode(input_ids[0, -1, :].tolist()))
             model_outputs = model(input_ids, mc_token_ids, token_type_ids=token_type_ids, token_emotion_ids=token_emotion_ids)
             lm_logits, mc_logits = model_outputs[0], model_outputs[1]  # So we can also use GPT2 outputs
