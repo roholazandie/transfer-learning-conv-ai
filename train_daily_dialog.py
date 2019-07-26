@@ -50,7 +50,7 @@ def build_input_from_segments(history, reply, tokenizer, lm_labels=False, with_e
     bos, eos, speaker1, speaker2 = tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS[:-1])
 
     instance = {}
-    sequence = [[bos]] + history + [reply + ([eos] if with_eos else [])] #seq = [personas, history, reply] concatenate all persona sentences
+    sequence = [[bos] + history[0]] + history[1:] +[reply +([eos] if with_eos else [])]
     sequence = [sequence[0]] + [[speaker2 if (len(sequence)-i) % 2 else speaker1] + s for i, s in enumerate(sequence[1:])]
 
     instance["input_ids"] = list(chain(*sequence))
@@ -65,6 +65,9 @@ def build_input_from_segments(history, reply, tokenizer, lm_labels=False, with_e
 def get_data_loaders(args, tokenizer):
     """ Prepare the dataset for training and evaluation """
     personachat = get_dataset(tokenizer, args.dataset_path, args.dataset_cache)
+
+    personachat["train"] = personachat["train"][:100]
+    personachat["valid"] = personachat["valid"][:10]
 
     logger.info("Build inputs and labels")
     datasets = {"train": defaultdict(list), "valid": defaultdict(list)}
