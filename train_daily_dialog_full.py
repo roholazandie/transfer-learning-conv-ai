@@ -56,7 +56,7 @@ def build_input_from_segments(history, emotions,  reply, candidate_emotion,  tok
     #sequence = [[bos] + history[0] + list(chain(*history[1:]))] + [reply + ([eos] if with_eos else [])] #seq = [personas, history, reply] concatenate all persona sentences
     sequence = [[bos] + history[0]] + history[1:] +[reply +([eos] if with_eos else [])]
     sequence = [[speaker2 if (len(sequence)-i) % 2 else speaker1] + s for i, s in enumerate(sequence)]
-    all_emotions = emotions+[candidate_emotion]
+    all_emotions = emotions + [candidate_emotion]
     sequence = [[all_emotions[i]] + s for i, s in enumerate(sequence)]
 
     instance["input_ids"] = list(chain(*sequence))

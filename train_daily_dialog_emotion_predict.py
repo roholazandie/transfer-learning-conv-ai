@@ -69,6 +69,7 @@ def get_emotion_label(tokenizer, candidate_emotion):
 def build_input_from_segments(history, emotions, reply, true_emotion, tokenizer, with_eos=True):
     """ Build a sequence of input from 3 segments: persona, history and last reply """
     bos, eos, speaker1, speaker2 = tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS[:4])
+    #tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS[-1])
 
     instance = {}
     # sequence = [[bos] + history[0] + list(chain(*history[1:]))]  + [reply + ([eos] if with_eos else [])] #seq = [personas, history, reply] concatenate all persona sentences
@@ -77,7 +78,8 @@ def build_input_from_segments(history, emotions, reply, true_emotion, tokenizer,
 
     instance["input_ids"] = list(chain(*sequence))
     instance["token_type_ids"] = [speaker2 if i % 2 else speaker1 for i, s in enumerate(sequence) for _ in s] # the last for is for repeating the speaker1 and speaker2 for all tokens
-    instance["token_emotion_ids"] = [emotions[i] for i, s in enumerate(sequence[:-1]) for _ in s] + [true_emotion] * len(sequence[-1])
+    #instance["token_emotion_ids"] = [emotions[i] for i, s in enumerate(sequence[:-1]) for _ in s] + [true_emotion] * len(sequence[-1])
+    instance["token_emotion_ids"] = [emotions[i] for i, s in enumerate(sequence[:-1]) for _ in s]
 
     instance["mc_token_ids"] = len(instance["input_ids"]) - 1
     instance["mc_labels"] = get_emotion_label(tokenizer, true_emotion)
@@ -89,8 +91,8 @@ def get_data_loaders(args, tokenizer):
     """ Prepare the dataset for training and evaluation """
     personachat = get_dataset_for_daily_dialog(tokenizer, args.dataset_path, args.dataset_cache, SPECIAL_TOKENS)
 
-    personachat["train"] = personachat["train"][:100]
-    personachat["valid"] = personachat["valid"][:10]
+    #personachat["train"] = personachat["train"][:100]
+    #personachat["valid"] = personachat["valid"][:10]
 
     logger.info("Build inputs and labels")
     datasets = {"train": defaultdict(list), "valid": defaultdict(list)}

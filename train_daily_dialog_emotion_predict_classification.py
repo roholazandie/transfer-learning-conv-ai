@@ -107,9 +107,9 @@ def get_data_loaders(args, tokenizer):
     datasets = {"train": defaultdict(list), "valid": defaultdict(list)}
     c = 0
     for dataset_name, dataset in personachat.items():
-        num_candidates = len(dataset[0]["utterances"][0]["candidates"])
-        if args.num_candidates > 0 and dataset_name == 'train':
-            num_candidates = min(args.num_candidates, num_candidates)
+        num_candidates = 2#len(dataset[0]["utterances"][0]["candidates"])
+        #if args.num_candidates > 0 and dataset_name == 'train':
+        #    num_candidates = min(args.num_candidates, num_candidates)
         for dialog in dataset:
             for utterance in dialog["utterances"]:
                 history = utterance["history"][-(2*args.max_history+1):]
@@ -149,8 +149,8 @@ def get_data_loaders(args, tokenizer):
         dataset = pad_dataset(dataset, padding=tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS[-1]))
         for input_name in MODEL_INPUTS:
             tensor = torch.tensor(dataset[input_name])
-            #if input_name != "mc_labels":
-            #    tensor = tensor.view((-1, datasets[dataset_name]["n_candidates"]) + tensor.shape[1:])
+            if input_name != "mc_labels":
+                tensor = tensor.view((-1, datasets[dataset_name]["n_candidates"]) + tensor.shape[1:])
             tensor_datasets[dataset_name].append(tensor)
 
     logger.info("Build train and validation dataloaders")
