@@ -895,6 +895,32 @@ class OpenAIGPTEmotionChoiceHead(nn.Module):
 
 
 
+class OpenAIGPTEmotionHead(nn.Module):
+    """ Classifier Head for the transformer """
+
+    def __init__(self, config):
+        super(OpenAIGPTEmotionHead, self).__init__()
+        self.n_embd = config.n_embd
+        self.dropout = nn.Dropout2d(config.resid_pdrop)  # To reproduce the noise_shape parameter of TF implementation
+        num_classes = 2 #this probably need to be 1
+        self.linear = nn.Linear(config.n_embd, num_classes)
+
+        nn.init.normal_(self.linear.weight, std=0.02)
+        nn.init.normal_(self.linear.bias, 0)
+
+    def forward(self, hidden_states, mc_token_ids):
+        # Classification logits
+        # hidden_state (bsz, seq_length, hidden_size)
+        # mc_token_ids (bsz,)
+        mc_token_ids = mc_token_ids.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, hidden_states.size(-1))
+        # mc_token_ids (bsz, 1, hidden_size)
+        multiple_choice_h = hidden_states.gather(1, mc_token_ids).squeeze(1)
+        # multiple_choice_h (bsz, hidden_size)
+        multiple_choice_h = self.dropout(multiple_choice_h)
+        multiple_choice_logits = self.linear(multiple_choice_h)
+        # (bsz, num_choices)
+        return multiple_choice_logits
+
 
 
 
@@ -929,6 +955,46 @@ class OpenAIGPTMultiHeadModel(OpenAIGPTPreTrainedModel):
         if mc_labels is not None:
             loss_fct = CrossEntropyLoss(ignore_index=-1)
             #loss_fct = CrossEntropyLoss()
+            losses.append(loss_fct(mc_logits.view(-1, mc_logits.size(-1)), mc_labels.view(-1)))
+        if losses:
+            return losses
+        if self.transformer.output_attentions:
+            return all_attentions, lm_logits, mc_logits
+        return lm_logits, mc_logits
+
+
+
+class OpenAIGPTForEmotionClassification(OpenAIGPTPreTrainedModel):
+    def __init__(self, config, output_attentions=False):
+        super(OpenAIGPTForEmotionClassification, self).__init__(config)
+        self.transformer = OpenAIGPTModel(config, output_attentions=output_attentions)
+        self.lm_head = OpenAIGPTLMHead(self.transformer.tokens_embed.weight, config)
+        self.emotion_classification_head = OpenAIGPTEmotionHead(config)
+        self.apply(self.init_weights)
+
+    def set_num_special_tokens(self, num_special_tokens, predict_special_tokens=True):
+        """ Update input and output embeddings with new embedding matrice
+            Make sure we are sharing the embeddings
+        """
+        self.config.predict_special_tokens = self.transformer.config.predict_special_tokens = predict_special_tokens
+        self.transformer.set_num_special_tokens(num_special_tokens)
+        self.lm_head.set_embeddings_weights(self.transformer.tokens_embed.weight, predict_special_tokens=predict_special_tokens)
+
+    def forward(self, input_ids, mc_token_ids, lm_labels=None, mc_labels=None, token_type_ids=None, position_ids=None):
+        hidden_states = self.transformer(input_ids, position_ids, token_type_ids)
+        if self.transformer.output_attentions:
+            all_attentions, hidden_states = hidden_states
+        lm_logits = self.lm_head(hidden_states)
+        mc_logits = self.emotion_classification_head(hidden_states, mc_token_ids)
+        losses = []
+        if lm_labels is not None: # when lm_labels is all -1 it means it's not the correct candidate which in turn means it's a negative example and we ignore it because ignore_index=-1
+            shift_logits = lm_logits[..., :-1, :].contiguous()
+            shift_labels = lm_labels[..., 1:].contiguous()
+            loss_fct = CrossEntropyLoss(ignore_index=-1)
+            losses.append(loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1)))
+        if mc_labels is not None:
+            #loss_fct = CrossEntropyLoss(ignore_index=-1)
+            loss_fct = CrossEntropyLoss()
             losses.append(loss_fct(mc_logits.view(-1, mc_logits.size(-1)), mc_labels.view(-1)))
         if losses:
             return losses

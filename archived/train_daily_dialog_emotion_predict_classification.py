@@ -7,6 +7,8 @@ from pprint import pformat
 from argparse import ArgumentParser
 from collections import defaultdict
 from itertools import chain
+from random import shuffle
+
 
 import torch
 from torch.nn.parallel import DistributedDataParallel
@@ -26,8 +28,8 @@ SPECIAL_TOKENS = ["<bos>", "<eos>", "<speaker1>", "<speaker2>",
                   "<no_emotion>", "<happiness>", "<surprise>", "<sadness>", "<disgust>", "<anger>", "<fear>",
                   "<directive>", "<inform>", "<commissive>", "<question>",
                   "<pad>"]
-MODEL_INPUTS = ["input_ids", "mc_token_ids", "lm_labels", "mc_labels", "token_type_ids", "token_emotion_ids"]
-PADDED_INPUTS = ["input_ids", "lm_labels", "token_type_ids", "token_emotion_ids"]
+MODEL_INPUTS = ["input_ids", "mc_token_ids", "lm_labels", "mc_emotion", "mc_labels", "token_type_ids", "token_emotion_ids"]
+PADDED_INPUTS = ["input_ids", "lm_labels", "token_type_ids", "token_emotion_ids", "mc_emotion"]
 
 logger = logging.getLogger(__file__)
 
@@ -66,68 +68,79 @@ def get_emotion_label(tokenizer, candidate_emotion):
         return 6
 
 
-def build_input_from_segments(history, emotions, reply, true_emotion, tokenizer, with_eos=True):
+def build_input_from_segments(history, emotions, reply, candidate_emotion, true_emotion, tokenizer, with_eos=True):
     """ Build a sequence of input from 3 segments: persona, history and last reply """
     bos, eos, speaker1, speaker2 = tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS[:4])
-    #tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS[-1])
 
     instance = {}
-    # sequence = [[bos] + history[0] + list(chain(*history[1:]))]  + [reply + ([eos] if with_eos else [])] #seq = [personas, history, reply] concatenate all persona sentences
     sequence = [[bos] + history[0]] + history[1:] + [reply + ([eos] if with_eos else [])]
     sequence = [[speaker2 if (len(sequence)-i) % 2 else speaker1] + s for i, s in enumerate(sequence)]
 
     instance["input_ids"] = list(chain(*sequence))
     instance["token_type_ids"] = [speaker2 if i % 2 else speaker1 for i, s in enumerate(sequence) for _ in s] # the last for is for repeating the speaker1 and speaker2 for all tokens
-    #instance["token_emotion_ids"] = [emotions[i] for i, s in enumerate(sequence[:-1]) for _ in s] + [true_emotion] * len(sequence[-1])
-    instance["token_emotion_ids"] = [emotions[i] for i, s in enumerate(sequence[:-1]) for _ in s]
+    instance["token_emotion_ids"] = [emotions[i] for i, s in enumerate(sequence[:-1]) for _ in s] + [candidate_emotion] * len(sequence[-1])
 
     instance["mc_token_ids"] = len(instance["input_ids"]) - 1
-    instance["mc_labels"] = get_emotion_label(tokenizer, true_emotion)
+    instance["mc_emotion"] = get_emotion_label(tokenizer, candidate_emotion) if true_emotion else -1
     instance["lm_labels"] = ([-1] * sum(len(s) for s in sequence[:-1])) + [-1] + sequence[-1][1:] #all -1 except for reply, reply is just the ids
     return instance, sequence
+
+def generate_candidate_emotions(tokenizer, emotion):
+    _, _, _, _, no_emotion_id, happiness_id, surprise_id, sadness_id, disgust_id, anger_id, fear_id, _, _, _, _, _ = tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS)
+
+    all_emotions = [no_emotion_id, happiness_id, surprise_id, sadness_id, disgust_id, anger_id, fear_id]
+    all_emotions.remove(emotion)
+    shuffle(all_emotions)
+    all_emotions.append(emotion)
+
+    return all_emotions[-2:]
 
 
 def get_data_loaders(args, tokenizer):
     """ Prepare the dataset for training and evaluation """
     personachat = get_dataset_for_daily_dialog(tokenizer, args.dataset_path, args.dataset_cache, SPECIAL_TOKENS)
 
-    #personachat["train"] = personachat["train"][:100]
-    #personachat["valid"] = personachat["valid"][:10]
+    personachat["train"] = personachat["train"][:100]
+    personachat["valid"] = personachat["valid"][:10]
 
     logger.info("Build inputs and labels")
     datasets = {"train": defaultdict(list), "valid": defaultdict(list)}
     c = 0
     for dataset_name, dataset in personachat.items():
         num_candidates = 2#len(dataset[0]["utterances"][0]["candidates"])
-        if args.num_candidates > 0 and dataset_name == 'train':
-            num_candidates = min(args.num_candidates, num_candidates)
+        #if args.num_candidates > 0 and dataset_name == 'train':
+        #    num_candidates = min(args.num_candidates, num_candidates)
         for dialog in dataset:
             for utterance in dialog["utterances"]:
-                history = utterance["history"][-(2 * args.max_history + 1):]
+                history = utterance["history"][-(2*args.max_history+1):]
                 emotions = utterance["emotion"][-(2 * args.max_history + 1):]
                 reply = utterance["candidates"][-1]
-                true_emotion = utterance['candidates_emotions'][-1]
-                instance, _ = build_input_from_segments(history,
-                                                        emotions,
-                                                        reply,
-                                                        true_emotion,
-                                                        tokenizer)
-
-                if len(instance["input_ids"]) > 310:
-                    truncated_history = [hist[:10] for hist in history]
-                    truncated_candidate = reply[:10]
-                    true_emotion = utterance['candidates_emotions'][-1]
-                    instance, _ = build_input_from_segments(truncated_history,
+                emotion = utterance["candidates_emotions"][-1]
+                candidate_emotions = generate_candidate_emotions(tokenizer, emotion)
+                for j, candidate_emotion in enumerate(candidate_emotions):
+                    true_emotion = bool(j == num_candidates-1)
+                    instance, _ = build_input_from_segments(history,
                                                             emotions,
-                                                            truncated_candidate,
+                                                            reply,
+                                                            candidate_emotion,
                                                             true_emotion,
                                                             tokenizer)
-                    c+=1
 
-                for input_name, input_array in instance.items():
-                    datasets[dataset_name][input_name].append(input_array)
+                    if len(instance["input_ids"]) > 310:
+                        truncated_history = [hist[:10] for hist in history]
+                        truncated_candidate = reply[:10]
+                        instance, _ = build_input_from_segments(truncated_history,
+                                                                emotions,
+                                                                truncated_candidate,
+                                                                candidate_emotion,
+                                                                true_emotion,
+                                                                tokenizer)
+                        c+=1
 
-                #datasets[dataset_name]["mc_labels"].append(num_candidates - 1)
+                    for input_name, input_array in instance.items():
+                        datasets[dataset_name][input_name].append(input_array)
+
+                datasets[dataset_name]["mc_labels"].append(num_candidates - 1)
                 datasets[dataset_name]["n_candidates"] = num_candidates
     print(c)
     logger.info("Pad inputs and convert to Tensor")
@@ -136,8 +149,8 @@ def get_data_loaders(args, tokenizer):
         dataset = pad_dataset(dataset, padding=tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS[-1]))
         for input_name in MODEL_INPUTS:
             tensor = torch.tensor(dataset[input_name])
-            #if input_name != "mc_labels":
-            #    tensor = tensor.view((-1, datasets[dataset_name]["n_candidates"]) + tensor.shape[1:])
+            if input_name != "mc_labels":
+                tensor = tensor.view((-1, datasets[dataset_name]["n_candidates"]) + tensor.shape[1:])
             tensor_datasets[dataset_name].append(tensor)
 
     logger.info("Build train and validation dataloaders")
@@ -210,7 +223,7 @@ def train():
     # Training function and trainer
     def update(engine, batch):
         model.train()
-        input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids, token_emotion_ids = tuple(input_tensor.to(args.device) for input_tensor in batch)
+        input_ids, mc_token_ids, lm_labels, mc_emotion, mc_labels, token_type_ids, token_emotion_ids = tuple(input_tensor.to(args.device) for input_tensor in batch)
         #token_emotion_ids = None
         lm_loss, mc_loss = model(input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids, token_emotion_ids)
         loss = (lm_loss * args.lm_coef + mc_loss * args.mc_coef) / args.gradient_accumulation_steps
