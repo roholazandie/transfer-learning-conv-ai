@@ -16,6 +16,8 @@ from ignite.handlers import ModelCheckpoint
 from ignite.metrics import Accuracy, Loss, MetricsLambda, RunningAverage, Precision, Recall, ConfusionMatrix
 from ignite.contrib.handlers import ProgressBar, PiecewiseLinear
 from ignite.contrib.handlers.tensorboard_logger import TensorboardLogger, OutputHandler, OptimizerParamsHandler
+
+from config import Config
 from pytorch_pretrained_bert import (OpenAIAdam, OpenAIGPTForEmotionClassification, OpenAIGPTTokenizer,
                                      GPT2DoubleHeadsModel, GPT2Tokenizer, WEIGHTS_NAME, CONFIG_NAME,
                                      BertModel, BertTokenizer)
@@ -31,11 +33,11 @@ PADDED_INPUTS = ["input_ids", "lm_labels", "token_type_ids"]
 
 logger = logging.getLogger(__file__)
 
-def average_distributed_scalar(scalar, args):
+def average_distributed_scalar(scalar, config):
     """ Average a scalar over the nodes if we are in distributed training. We use this for distributed evaluation. """
-    if args.local_rank == -1:
+    if config.local_rank == -1:
         return scalar
-    scalar_t = torch.tensor(scalar, dtype=torch.float, device=args.device) / torch.distributed.get_world_size()
+    scalar_t = torch.tensor(scalar, dtype=torch.float, device=config.device) / torch.distributed.get_world_size()
     torch.distributed.all_reduce(scalar_t, op=torch.distributed.ReduceOp.SUM)
     return scalar_t.item()
 
@@ -85,9 +87,9 @@ def build_input_from_segments(history, emotions, reply, true_emotion, tokenizer,
     return instance, sequence
 
 
-def get_data_loaders(args, tokenizer):
+def get_data_loaders(config, tokenizer):
     """ Prepare the dataset for training and evaluation """
-    personachat = get_dataset_for_daily_dialog(tokenizer, args.dataset_path, args.dataset_cache, SPECIAL_TOKENS)
+    personachat = get_dataset_for_daily_dialog(tokenizer, config.dataset_path, config.dataset_cache, SPECIAL_TOKENS)
 
     #personachat["train"] = personachat["train"][:100]
     #personachat["valid"] = personachat["valid"][:10]
@@ -97,12 +99,12 @@ def get_data_loaders(args, tokenizer):
     c = 0
     for dataset_name, dataset in personachat.items():
         num_candidates = 2#len(dataset[0]["utterances"][0]["candidates"])
-        if args.num_candidates > 0 and dataset_name == 'train':
-            num_candidates = min(args.num_candidates, num_candidates)
+        if config.num_candidates > 0 and dataset_name == 'train':
+            num_candidates = min(config.num_candidates, num_candidates)
         for dialog in dataset:
             for utterance in dialog["utterances"]:
-                history = utterance["history"][-(2 * args.max_history + 1):]
-                emotions = utterance["emotion"][-(2 * args.max_history + 1):]
+                history = utterance["history"][-(2 * config.max_history + 1):]
+                emotions = utterance["emotion"][-(2 * config.max_history + 1):]
                 reply = utterance["candidates"][-1]
                 true_emotion = utterance['candidates_emotions'][-1]
                 instance, _ = build_input_from_segments(history,
@@ -140,10 +142,10 @@ def get_data_loaders(args, tokenizer):
 
     logger.info("Build train and validation dataloaders")
     train_dataset, valid_dataset = TensorDataset(*tensor_datasets["train"]), TensorDataset(*tensor_datasets["valid"])
-    train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset) if args.distributed else None
-    valid_sampler = torch.utils.data.distributed.DistributedSampler(valid_dataset) if args.distributed else None
-    train_loader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size, shuffle=False)
-    valid_loader = DataLoader(valid_dataset, sampler=valid_sampler, batch_size=args.valid_batch_size, shuffle=False)
+    train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset) if config.distributed else None
+    valid_sampler = torch.utils.data.distributed.DistributedSampler(valid_dataset) if config.distributed else None
+    train_loader = DataLoader(train_dataset, sampler=train_sampler, batch_size=config.train_batch_size, shuffle=False)
+    valid_loader = DataLoader(valid_dataset, sampler=valid_sampler, batch_size=config.valid_batch_size, shuffle=False)
 
     logger.info("Train dataset (Batch, Candidates, Seq length): {}".format(train_dataset.tensors[0].shape))
     logger.info("Valid dataset (Batch, Candidates, Seq length): {}".format(valid_dataset.tensors[0].shape))
@@ -151,75 +153,56 @@ def get_data_loaders(args, tokenizer):
 
 
 def train():
-    parser = ArgumentParser()
-    parser.add_argument("--dataset_path", type=str, default="/home/rohola/data/daily_dialog_full/daily_dialog.json", help="Path or url of the dataset. If empty download from S3.")
-    parser.add_argument("--dataset_cache", type=str, default='./daily_dialog_dataset_cache', help="Path or url of the dataset cache")
-    parser.add_argument("--model_checkpoint", type=str, default="openai-gpt", help="Path, url or short name of the model")
-    parser.add_argument("--num_candidates", type=int, default=2, help="Number of candidates for training")
-    parser.add_argument("--max_history", type=int, default=2, help="Number of previous exchanges to keep in history")
-    parser.add_argument("--train_batch_size", type=int, default=1, help="Batch size for training")
-    parser.add_argument("--valid_batch_size", type=int, default=1, help="Batch size for validation")
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=8, help="Accumulate gradients on several steps")
-    parser.add_argument("--lr", type=float, default=6.25e-5, help="Learning rate")
-    parser.add_argument("--lm_coef", type=float, default=1.0, help="LM loss coefficient")
-    parser.add_argument("--mc_coef", type=float, default=1.0, help="Multiple-choice loss coefficient")
-    parser.add_argument("--max_norm", type=float, default=1.0, help="Clipping gradient norm")
-    parser.add_argument("--n_epochs", type=int, default=3, help="Number of training epochs")
-    parser.add_argument("--personality_permutations", type=int, default=1, help="Number of permutations of personality sentences")
-    parser.add_argument("--eval_before_start", action='store_true', help="If true start with a first evaluation before training")
-    parser.add_argument("--device", type=str, default="cuda:0" if torch.cuda.is_available() else "cpu", help="Device (cuda or cpu)")
-    parser.add_argument("--fp16", type=str, default="", help="Set to O0, O1, O2 or O3 for fp16 training (see apex documentation)")
-    parser.add_argument("--local_rank", type=int, default=-1, help="Local rank for distributed training (-1: not distributed)")
-    parser.add_argument("--log_dir", type=str, default="", help="Local rank for distributed training (-1: not distributed)")
-    args = parser.parse_args()
+    config_file = "configs/train_daily_dialog_only_emotion_classifier_config.json"
+    config = Config.from_json_file(config_file)
 
     # logging is set to INFO (resp. WARN) for main (resp. auxiliary) process. logger.info => log main process only, logger.warning => log all processes
-    logging.basicConfig(level=logging.INFO if args.local_rank in [-1, 0] else logging.WARN)
-    logger.warning("Running process %d", args.local_rank)  # This is a logger.warning: it will be printed by all distributed processes
-    logger.info("Arguments: %s", pformat(args))
+    logging.basicConfig(level=logging.INFO if config.local_rank in [-1, 0] else logging.WARN)
+    logger.warning("Running process %d", config.local_rank)  # This is a logger.warning: it will be printed by all distributed processes
+    logger.info("Arguments: %s", pformat(config))
 
     # Initialize distributed training if needed
-    args.distributed = (args.local_rank != -1)
-    if args.distributed:
-        torch.cuda.set_device(args.local_rank)
-        args.device = torch.device("cuda", args.local_rank)
+    config.distributed = (config.local_rank != -1)
+    if config.distributed:
+        torch.cuda.set_device(config.local_rank)
+        config.device = torch.device("cuda", config.local_rank)
         torch.distributed.init_process_group(backend='nccl', init_method='env://')
 
     logger.info("Prepare tokenizer, pretrained model and optimizer - add special tokens for fine-tuning")
-    tokenizer_class = GPT2Tokenizer if "gpt2" in args.model_checkpoint else OpenAIGPTTokenizer
-    tokenizer = tokenizer_class.from_pretrained(args.model_checkpoint)
-    model_class = GPT2DoubleHeadsModel if "gpt2" in args.model_checkpoint else OpenAIGPTForEmotionClassification
-    model = model_class.from_pretrained(args.model_checkpoint)
+    tokenizer_class = GPT2Tokenizer if "gpt2" in config.model_checkpoint else OpenAIGPTTokenizer
+    tokenizer = tokenizer_class.from_pretrained(config.model_checkpoint)
+    model_class = GPT2DoubleHeadsModel if "gpt2" in config.model_checkpoint else OpenAIGPTForEmotionClassification
+    model = model_class.from_pretrained(config.model_checkpoint)
     tokenizer.set_special_tokens(SPECIAL_TOKENS)
     model.set_num_special_tokens(len(SPECIAL_TOKENS))
-    model.to(args.device)
-    optimizer = OpenAIAdam(model.parameters(), lr=args.lr)
+    model.to(config.device)
+    optimizer = OpenAIAdam(model.parameters(), lr=config.lr)
 
     # Prepare model for FP16 and distributed training if needed (order is important, distributed should be the last)
-    if args.fp16:
+    if config.fp16:
         from apex import amp  # Apex is only required if we use fp16 training
-        model, optimizer = amp.initialize(model, optimizer, opt_level=args.fp16)
-    if args.distributed:
-        model = DistributedDataParallel(model, device_ids=[args.local_rank], output_device=args.local_rank)
+        model, optimizer = amp.initialize(model, optimizer, opt_level=config.fp16)
+    if config.distributed:
+        model = DistributedDataParallel(model, device_ids=[config.local_rank], output_device=config.local_rank)
 
     logger.info("Prepare datasets")
-    train_loader, val_loader, train_sampler, valid_sampler = get_data_loaders(args, tokenizer)
+    train_loader, val_loader, train_sampler, valid_sampler = get_data_loaders(config, tokenizer)
 
     # Training function and trainer
     def update(engine, batch):
         model.train()
-        input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids = tuple(input_tensor.to(args.device) for input_tensor in batch)
+        input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids = tuple(input_tensor.to(config.device) for input_tensor in batch)
         #token_emotion_ids = None
         lm_loss, mc_loss = model(input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids)
-        loss = (lm_loss * args.lm_coef + mc_loss * args.mc_coef) / args.gradient_accumulation_steps
-        if args.fp16:
+        loss = (lm_loss * config.lm_coef + mc_loss * config.mc_coef) / config.gradient_accumulation_steps
+        if config.fp16:
             with amp.scale_loss(loss, optimizer) as scaled_loss:
                 scaled_loss.backward()
-            torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), args.max_norm)
+            torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), config.max_norm)
         else:
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_norm)
-        if engine.state.iteration % args.gradient_accumulation_steps == 0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), config.max_norm)
+        if engine.state.iteration % config.gradient_accumulation_steps == 0:
             optimizer.step()
             optimizer.zero_grad()
         return loss.item()
@@ -229,7 +212,7 @@ def train():
     def inference(engine, batch):
         model.eval()
         with torch.no_grad():
-            batch = tuple(input_tensor.to(args.device) for input_tensor in batch)
+            batch = tuple(input_tensor.to(config.device) for input_tensor in batch)
             input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids = batch
             #logger.info(tokenizer.decode(input_ids[0, -1, :].tolist()))
             model_outputs = model(input_ids, mc_token_ids, token_type_ids=token_type_ids)
@@ -241,18 +224,18 @@ def train():
 
     # Attach evaluation to trainer: we evaluate when we start the training and at the end of each epoch
     trainer.add_event_handler(Events.EPOCH_COMPLETED, lambda _: evaluator.run(val_loader))
-    if args.n_epochs < 1:
+    if config.n_epochs < 1:
         trainer.add_event_handler(Events.COMPLETED, lambda _: evaluator.run(val_loader))
-    if args.eval_before_start:
+    if config.eval_before_start:
         trainer.add_event_handler(Events.STARTED, lambda _: evaluator.run(val_loader))
 
     # Make sure distributed data samplers split the dataset nicely between the distributed processes
-    if args.distributed:
+    if config.distributed:
         trainer.add_event_handler(Events.EPOCH_STARTED, lambda engine: train_sampler.set_epoch(engine.state.epoch))
         evaluator.add_event_handler(Events.EPOCH_STARTED, lambda engine: valid_sampler.set_epoch(engine.state.epoch))
 
     # Linearly decrease the learning rate from lr to zero
-    scheduler = PiecewiseLinear(optimizer, "lr", [(0, args.lr), (args.n_epochs * len(train_loader), 0.0)])
+    scheduler = PiecewiseLinear(optimizer, "lr", [(0, config.lr), (config.n_epochs * len(train_loader), 0.0)])
     trainer.add_event_handler(Events.ITERATION_STARTED, scheduler)
 
     # Prepare metrics - note how we compute distributed metrics
@@ -261,8 +244,8 @@ def train():
                "accuracy": Accuracy(output_transform=lambda x: (x[0][1], x[1][1]))}
     metrics.update({"precision": Precision(output_transform=lambda x: (x[0][1], x[1][1])),
                     "recall": Recall(output_transform=lambda x: (x[0][1], x[1][1]))})
-    metrics.update({"average_nll": MetricsLambda(average_distributed_scalar, metrics["nll"], args),
-                    "average_accuracy": MetricsLambda(average_distributed_scalar, metrics["accuracy"], args)})
+    metrics.update({"average_nll": MetricsLambda(average_distributed_scalar, metrics["nll"], config),
+                    "average_accuracy": MetricsLambda(average_distributed_scalar, metrics["accuracy"], config)})
 
     metrics.update({"confusion_matrix": ConfusionMatrix(num_classes=2, output_transform=lambda x: (x[0][1], x[1][1]))})
     metrics["average_ppl"] = MetricsLambda(math.exp, metrics["average_nll"])
@@ -270,12 +253,12 @@ def train():
         metric.attach(evaluator, name)
 
     # On the main process: add progress bar, tensorboard, checkpoints and save model, configuration and tokenizer before we start to train
-    if args.local_rank in [-1, 0]:
+    if config.local_rank in [-1, 0]:
         pbar = ProgressBar(persist=True)
         pbar.attach(trainer, metric_names=["loss"])
         evaluator.add_event_handler(Events.COMPLETED, lambda _: pbar.log_message("Validation: %s" % pformat(evaluator.state.metrics)))
 
-        tb_logger = TensorboardLogger(log_dir=args.log_dir)
+        tb_logger = TensorboardLogger(log_dir=config.log_dir)
         tb_logger.attach(trainer, log_handler=OutputHandler(tag="training", metric_names=["loss"]), event_name=Events.ITERATION_COMPLETED)
         tb_logger.attach(trainer, log_handler=OptimizerParamsHandler(optimizer), event_name=Events.ITERATION_STARTED)
         tb_logger.attach(evaluator, log_handler=OutputHandler(tag="validation", metric_names=list(metrics.keys()), another_engine=trainer), event_name=Events.EPOCH_COMPLETED)
@@ -283,15 +266,15 @@ def train():
         checkpoint_handler = ModelCheckpoint(tb_logger.writer.log_dir, 'checkpoint', save_interval=1, n_saved=3)
         trainer.add_event_handler(Events.EPOCH_COMPLETED, checkpoint_handler, {'mymodel': getattr(model, 'module', model)})  # "getattr" take care of distributed encapsulation
 
-        torch.save(args, tb_logger.writer.log_dir + '/model_training_args.bin')
+        torch.save(config, tb_logger.writer.log_dir + '/model_training_args.bin')
         getattr(model, 'module', model).config.to_json_file(os.path.join(tb_logger.writer.log_dir, CONFIG_NAME))
         tokenizer.save_vocabulary(tb_logger.writer.log_dir)
 
     # Run the training
-    trainer.run(train_loader, max_epochs=args.n_epochs)
+    trainer.run(train_loader, max_epochs=config.n_epochs)
 
     # On the main process: close tensorboard logger and rename the last checkpoint (for easy re-loading with OpenAIGPTModel.from_pretrained method)
-    if args.local_rank in [-1, 0] and args.n_epochs > 0:
+    if config.local_rank in [-1, 0] and config.n_epochs > 0:
         os.rename(checkpoint_handler._saved[-1][1][-1], os.path.join(tb_logger.writer.log_dir, WEIGHTS_NAME))  # TODO: PR in ignite to have better access to saved file paths (cleaner)
         tb_logger.close()
 

@@ -12,3 +12,4 @@ env/*
 ParlAI/*
 model/*
 logs/*
+*config.json

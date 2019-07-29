@@ -124,10 +124,8 @@ def get_data_loaders(args, tokenizer):
 
 
 def train():
-    parser = ArgumentParser()
-    parser.add_argument("--config", type=str)
-    args = parser.parse_args()
-    config = Config.from_json_file(args.config)
+    config_file = "configs/train_using_bert_config.json"
+    config = Config.from_json_file(config_file)
 
     # logging is set to INFO (resp. WARN) for main (resp. auxiliary) process. logger.info => log main process only, logger.warning => log all processes
     logging.basicConfig(level=logging.INFO if config.local_rank in [-1, 0] else logging.WARN)
