@@ -168,13 +168,13 @@ def train():
     # Training function and trainer
     def update(engine, batch):
         model.train()
-        input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids, token_emotion_ids = tuple(input_tensor.to(configs.device) for input_tensor in batch)
+        input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids, token_emotion_ids = tuple(input_tensor.to(config.device) for input_tensor in batch)
         lm_loss, mc_loss = model(input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids, token_emotion_ids)
         loss = (lm_loss * config.lm_coef + mc_loss * config.mc_coef) / config.gradient_accumulation_steps
         if config.fp16:
             with amp.scale_loss(loss, optimizer) as scaled_loss:
                 scaled_loss.backward()
-            torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), configs.max_norm)
+            torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), config.max_norm)
         else:
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), config.max_norm)
