@@ -135,7 +135,7 @@ def get_data_loaders(config, tokenizer):
 
 
 def train():
-    config_file = "configs/train_daily_dialog_full_config.json"
+    config_file = "configs/train_daily_dialog_emotion_action_config.json"
     config = Config.from_json_file(config_file)
 
 
