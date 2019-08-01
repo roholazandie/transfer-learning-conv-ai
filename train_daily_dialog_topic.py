@@ -21,10 +21,11 @@ from pytorch_pretrained_bert import (OpenAIAdam, OpenAIGPTDoubleHeadsModel, Open
                                      GPT2DoubleHeadsModel, GPT2Tokenizer, WEIGHTS_NAME, CONFIG_NAME,
                                      BertModel, BertTokenizer)
 
-from utils import get_dataset_for_daily_dialog
+from utils import get_dataset, get_dataset_for_daily_dialog
 
 SPECIAL_TOKENS = ["<bos>", "<eos>", "<speaker1>", "<speaker2>",
                   "<no_emotion>", "<happiness>", "<surprise>", "<sadness>", "<disgust>", "<anger>", "<fear>",
+                 "<work>", "<finance>", "<relationship>", "<attitude_and_emotion>", "<culture_and_educastion>", "<school_life>", "<tourism>", "<ordinary_life>", "<politics>", "<health>",
                   "<directive>", "<inform>", "<commissive>", "<question>",
                   "<pad>"]
 MODEL_INPUTS = ["input_ids", "mc_token_ids", "lm_labels", "mc_labels",
@@ -50,14 +51,19 @@ def pad_dataset(dataset, padding=0):
     return dataset
 
 
-def build_input_from_segments(history, emotions, actions, reply, candidate_emotion,  canidate_act, tokenizer, lm_labels=False, with_eos=True):
+def build_input_from_segments(topic, history, emotions, actions, reply, candidate_emotion,  canidate_act, tokenizer, lm_labels=False, with_eos=True):
     """ Build a sequence of input from 3 segments: persona, history and last reply """
-    bos, eos, speaker1, speaker2 = tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS[:4])
+    bos, eos, speaker1, speaker2, no_emotion = tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS[:5])
+
+    inform = tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS[-4])
+    emotions = [no_emotion] + emotions
+    actions = [inform] + actions
 
     instance = {}
     #sequence = [[bos] + history[0] + list(chain(*history[1:]))] + [reply + ([eos] if with_eos else [])] #seq = [personas, history, reply] concatenate all persona sentences
-    sequence = [[bos] + history[0]] + history[1:] +[reply +([eos] if with_eos else [])]
+    sequence = [[bos] + [topic]] + history + [reply + ([eos] if with_eos else [])]
     sequence = [[speaker2 if (len(sequence)-i) % 2 else speaker1] + s for i, s in enumerate(sequence)]
+
     all_emotions = emotions + [candidate_emotion]
     sequence = [[all_emotions[i]] + s for i, s in enumerate(sequence)]
 
@@ -77,8 +83,8 @@ def get_data_loaders(config, tokenizer):
     """ Prepare the dataset for training and evaluation """
     personachat = get_dataset_for_daily_dialog(tokenizer, config.dataset_path, config.dataset_cache, SPECIAL_TOKENS)
 
-    #personachat["train"] = personachat["train"][:100]
-    #personachat["valid"] = personachat["valid"][:10]
+    # personachat["train"] = personachat["train"][:100]
+    # personachat["valid"] = personachat["valid"][:10]
 
 
     logger.info("Build inputs and labels")
@@ -89,6 +95,7 @@ def get_data_loaders(config, tokenizer):
         if config.num_candidates > 0 and dataset_name == 'train':
             num_candidates = min(config.num_candidates, num_candidates)
         for dialog in dataset:
+            topic = dialog["topic"]
             for utterance in dialog["utterances"]:
                 history = utterance["history"][-(2 * config.max_history+1):]
                 emotions = utterance["emotion"][-(2 * config.max_history + 1):]
@@ -97,13 +104,13 @@ def get_data_loaders(config, tokenizer):
                     lm_labels = bool(j == num_candidates-1) #the true label is always the last one in list of candidates
                     candidate_emotion = utterance['candidates_emotions'][j]
                     candidate_act = utterance['candidates_acts'][j]
-                    instance, _ = build_input_from_segments(history, emotions, actions, candidate,
+                    instance, _ = build_input_from_segments(topic, history, emotions, actions, candidate,
                                                             candidate_emotion, candidate_act, tokenizer, lm_labels)
                     #print(len(instance["input_ids"]))
                     if len(instance["input_ids"]) > 310:
                         truncated_history = [hist[:10] for hist in history]
                         truncated_candidate = candidate[:10]
-                        instance, _ = build_input_from_segments(truncated_history, emotions, actions, truncated_candidate,
+                        instance, _ = build_input_from_segments(topic, truncated_history, emotions, actions, truncated_candidate,
                                                                 candidate_emotion, candidate_act, tokenizer, lm_labels)
                         c+=1
 
@@ -135,7 +142,7 @@ def get_data_loaders(config, tokenizer):
 
 
 def train():
-    config_file = "configs/train_daily_dialog_emotion_action_config.json"
+    config_file = "configs/train_daily_dialog_topic_config.json"
     config = Config.from_json_file(config_file)
 
 

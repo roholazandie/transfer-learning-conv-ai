@@ -13,3 +13,4 @@ ParlAI/*
 model/*
 logs/*
 *config.json
+caches/*
