@@ -900,6 +900,31 @@ class OpenAIGPTEmotionChoiceHead(nn.Module):
         # (bsz, num_choices)
         return multiple_choice_logits
 
+class OpenAIGPTBatchedEmotionChoiceHead(nn.Module):
+
+    def __init__(self, config):
+        super(OpenAIGPTBatchedEmotionChoiceHead, self).__init__()
+        self.n_embd = config.n_embd
+        self.dropout = nn.Dropout2d(config.resid_pdrop)  # To reproduce the noise_shape parameter of TF implementation
+        num_emotions = 7
+        self.linear = nn.Linear(config.n_embd, num_emotions)
+
+        nn.init.normal_(self.linear.weight, std=0.02)
+        nn.init.normal_(self.linear.bias, 0)
+
+    def forward(self, hidden_states, mc_token_ids):
+        # Classification logits
+        # hidden_state (bsz, num_choices, seq_length, hidden_size)
+        # mc_token_ids (bsz, num_choices)
+        mc_token_ids = mc_token_ids.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, -1, hidden_states.size(-1))
+        # mc_token_ids (bsz, num_choices, 1, hidden_size)
+        multiple_choice_h = hidden_states.gather(2, mc_token_ids).squeeze(2)
+        # multiple_choice_h (bsz, num_choices, hidden_size)
+        multiple_choice_h = self.dropout(multiple_choice_h.transpose(1, 2)).transpose(1, 2)
+        multiple_choice_logits = self.linear(multiple_choice_h).squeeze(-1)
+        # (bsz, num_choices)
+        return multiple_choice_logits
+
 
 
 class OpenAIGPTEmotionHead(nn.Module):
@@ -931,9 +956,9 @@ class OpenAIGPTEmotionHead(nn.Module):
 
 
 
-class OpenAIGPTMultiHeadModel(OpenAIGPTPreTrainedModel):
+class OpenAIGPTDoubleHeadLMEmotionModel(OpenAIGPTPreTrainedModel):
     def __init__(self, config, output_attentions=False):
-        super(OpenAIGPTMultiHeadModel, self).__init__(config)
+        super(OpenAIGPTDoubleHeadLMEmotionModel, self).__init__(config)
         self.transformer = OpenAIGPTModel(config, output_attentions=output_attentions)
         self.lm_head = OpenAIGPTLMHead(self.transformer.tokens_embed.weight, config)
         self.emotion_choice_head = OpenAIGPTEmotionChoiceHead(config)
@@ -1008,3 +1033,52 @@ class OpenAIGPTForEmotionClassification(OpenAIGPTPreTrainedModel):
         if self.transformer.output_attentions:
             return all_attentions, lm_logits, mc_logits
         return lm_logits, mc_logits
+
+
+
+
+class OpenAIGPTMultiHeadModel(OpenAIGPTPreTrainedModel):
+    def __init__(self, config, output_attentions=False):
+        super(OpenAIGPTMultiHeadModel, self).__init__(config)
+        self.transformer = OpenAIGPTModel(config, output_attentions=output_attentions)
+        self.lm_head = OpenAIGPTLMHead(self.transformer.tokens_embed.weight, config)
+        self.emotion_choice_head = OpenAIGPTBatchedEmotionChoiceHead(config)
+        self.sentence_choice_head = OpenAIGPTMultipleChoiceHead(config)
+        self.apply(self.init_weights)
+
+    def set_num_special_tokens(self, num_special_tokens, predict_special_tokens=True):
+        """ Update input and output embeddings with new embedding matrice
+            Make sure we are sharing the embeddings
+        """
+        self.config.predict_special_tokens = self.transformer.config.predict_special_tokens = predict_special_tokens
+        self.transformer.set_num_special_tokens(num_special_tokens)
+        self.lm_head.set_embeddings_weights(self.transformer.tokens_embed.weight, predict_special_tokens=predict_special_tokens)
+
+    def forward(self, input_ids, ec_token_ids, sc_token_ids, lm_labels=None,
+                ec_labels=None, sc_labels=None, token_type_ids=None,
+                token_emotion_ids=None, token_action_ids=None,
+                position_ids=None):
+
+        hidden_states = self.transformer(input_ids, position_ids, token_type_ids, token_emotion_ids)
+        if self.transformer.output_attentions:
+            all_attentions, hidden_states = hidden_states
+        lm_logits = self.lm_head(hidden_states)
+        emotion_logits = self.emotion_choice_head(hidden_states, ec_token_ids)
+        sentence_logits = self.sentence_choice_head(hidden_states, sc_token_ids)
+        losses = []
+        if lm_labels is not None: # when lm_labels is all -1 it means it's not the correct candidate which in turn means it's a negative example and we ignore it because ignore_index=-1
+            shift_logits = lm_logits[..., :-1, :].contiguous()
+            shift_labels = lm_labels[..., 1:].contiguous()
+            loss_fct = CrossEntropyLoss(ignore_index=-1)
+            losses.append(loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1)))
+        if ec_labels is not None:
+            loss_fct = CrossEntropyLoss(ignore_index=-1)
+            losses.append(loss_fct(emotion_logits.view(-1, emotion_logits.size(-1)), ec_labels.view(-1)))
+        if sc_labels is not None:
+            loss_fct = CrossEntropyLoss(ignore_index=-1)
+            losses.append(loss_fct(sentence_logits.view(-1, sentence_logits.size(-1)), sc_labels.view(-1)))
+        if losses:
+            return losses
+        if self.transformer.output_attentions:
+            return all_attentions, lm_logits, emotion_logits, sentence_logits
+        return lm_logits, emotion_logits, sentence_logits

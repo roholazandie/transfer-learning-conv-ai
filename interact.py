@@ -91,10 +91,10 @@ def sample_sequence(personality, history, tokenizer, model, args, SPECIAL_TOKENS
 
 def run():
     parser = ArgumentParser()
-    parser.add_argument("--dataset_path", type=str, default="",
+    parser.add_argument("--dataset_path", type=str, default="/home/rohola/data/daily_dialog_full/daily_dialog.json",
                         help="Path or url of the dataset. If empty download from S3.")
     parser.add_argument("--model", type=str, default="openai-gpt", help="Model type (gpt or gpt2)")
-    parser.add_argument("--dataset_cache", type=str, default='./dataset_cache', help="Path or url of the dataset cache")
+    parser.add_argument("--dataset_cache", type=str, default='./caches/daily_dialog_emotion_action_dataset_cache', help="Path or url of the dataset cache")
     parser.add_argument("--model_checkpoint", type=str, default="/home/rohola/codes/transfer-learning-conv-ai/logs/logs9", help="Path, url or short name of the model")
     #parser.add_argument("--model_checkpoint", type=str, default="gpt2", help="Path, url or short name of the model")
     #parser.add_argument("--model_checkpoint", type=str, default="/home/rohola/data/bert_checkpoint", help="Path, url or short name of the model")

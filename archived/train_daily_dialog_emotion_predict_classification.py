@@ -18,7 +18,7 @@ from ignite.handlers import ModelCheckpoint
 from ignite.metrics import Accuracy, Loss, MetricsLambda, RunningAverage, Precision, ConfusionMatrix
 from ignite.contrib.handlers import ProgressBar, PiecewiseLinear
 from ignite.contrib.handlers.tensorboard_logger import TensorboardLogger, OutputHandler, OptimizerParamsHandler
-from pytorch_pretrained_bert import (OpenAIAdam, OpenAIGPTMultiHeadModel, OpenAIGPTTokenizer,
+from pytorch_pretrained_bert import (OpenAIAdam, OpenAIGPTDoubleHeadLMEmotionModel, OpenAIGPTTokenizer,
                                      GPT2DoubleHeadsModel, GPT2Tokenizer, WEIGHTS_NAME, CONFIG_NAME,
                                      BertModel, BertTokenizer)
 
@@ -203,7 +203,7 @@ def train():
     logger.info("Prepare tokenizer, pretrained model and optimizer - add special tokens for fine-tuning")
     tokenizer_class = GPT2Tokenizer if "gpt2" in args.model_checkpoint else OpenAIGPTTokenizer
     tokenizer = tokenizer_class.from_pretrained(args.model_checkpoint)
-    model_class = GPT2DoubleHeadsModel if "gpt2" in args.model_checkpoint else OpenAIGPTMultiHeadModel
+    model_class = GPT2DoubleHeadsModel if "gpt2" in args.model_checkpoint else OpenAIGPTDoubleHeadLMEmotionModel
     model = model_class.from_pretrained(args.model_checkpoint)
     tokenizer.set_special_tokens(SPECIAL_TOKENS)
     model.set_num_special_tokens(len(SPECIAL_TOKENS))
