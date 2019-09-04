@@ -11,6 +11,7 @@ from itertools import chain
 import torch
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, TensorDataset
+from ignite.utils import to_onehot
 from ignite.engine import Engine, Events
 from ignite.handlers import ModelCheckpoint
 from ignite.metrics import Accuracy, Loss, MetricsLambda, RunningAverage, Precision, Recall, ConfusionMatrix
@@ -18,7 +19,7 @@ from ignite.contrib.handlers import ProgressBar, PiecewiseLinear
 from ignite.contrib.handlers.tensorboard_logger import TensorboardLogger, OutputHandler, OptimizerParamsHandler
 
 from config import Config
-from pytorch_pretrained_bert import (OpenAIAdam, OpenAIGPTForEmotionClassification, OpenAIGPTTokenizer,
+from pytorch_pretrained_bert import (OpenAIAdam, OpenAIGPTForEmotionDetection, OpenAIGPTTokenizer,
                                      GPT2DoubleHeadsModel, GPT2Tokenizer, WEIGHTS_NAME, CONFIG_NAME,
                                      BertModel, BertTokenizer)
 
@@ -157,13 +158,12 @@ def get_data_loaders(config, tokenizer):
 
 
 def train():
-    config_file = "configs/train_daily_dialog_only_emotion_classifier_config.json"
+    config_file = "configs/train_daily_dialog_emotion_detection_config.json"
     config = Config.from_json_file(config_file)
 
     # logging is set to INFO (resp. WARN) for main (resp. auxiliary) process. logger.info => log main process only, logger.warning => log all processes
     logging.basicConfig(level=logging.INFO if config.local_rank in [-1, 0] else logging.WARN)
-    logger.warning("Running process %d",
-                   config.local_rank)  # This is a logger.warning: it will be printed by all distributed processes
+    logger.warning("Running process %d", config.local_rank)
     logger.info("Arguments: %s", pformat(config))
 
     # Initialize distributed training if needed
@@ -176,7 +176,7 @@ def train():
     logger.info("Prepare tokenizer, pretrained model and optimizer - add special tokens for fine-tuning")
     tokenizer_class = GPT2Tokenizer if "gpt2" in config.model_checkpoint else OpenAIGPTTokenizer
     tokenizer = tokenizer_class.from_pretrained(config.model_checkpoint)
-    model_class = OpenAIGPTForEmotionClassification
+    model_class = OpenAIGPTForEmotionDetection
     model = model_class.from_pretrained(config.model_checkpoint)
     tokenizer.set_special_tokens(SPECIAL_TOKENS)
     model.set_num_special_tokens(len(SPECIAL_TOKENS))
@@ -196,6 +196,10 @@ def train():
 
     model.eval()
     n_emotions = 0
+    num_correct = 0
+    positives = 0
+    all_true_positives = 0
+    num_all = len(val_loader)
     for batch in val_loader:
         with torch.no_grad():
             batch = tuple(input_tensor.to(config.device) for input_tensor in batch)
@@ -203,10 +207,34 @@ def train():
             # logger.info(tokenizer.decode(input_ids[0, -1, :].tolist()))
             model_outputs = model(input_ids, mc_token_ids, token_type_ids=token_type_ids)
             lm_logits, mc_logits = model_outputs[0], model_outputs[1]  # So we can also use GPT2 outputs
-            if mc_logits[0][0] < mc_logits[0][1]:
-                n_emotions += 1
-            lm_logits_flat_shifted = lm_logits[..., :-1, :].contiguous().view(-1, lm_logits.size(-1))
-            lm_labels_flat_shifted = lm_labels[..., 1:].contiguous().view(-1)
+            indices = torch.argmax(mc_logits, dim=1)
+
+
+            correct = torch.eq(indices, mc_labels).view(-1)
+            num_correct += torch.sum(correct).item()
+
+
+
+            num_classes = mc_logits.size(1)
+            mc_labels = to_onehot(mc_labels.view(-1), num_classes=num_classes)
+            indices = torch.argmax(mc_logits, dim=1).view(-1)
+            mc_logits = to_onehot(indices, num_classes=num_classes)
+            mc_labels = mc_labels.type_as(mc_logits)
+            correct = mc_labels * mc_logits
+            all_positives = mc_logits.sum(dim=0).type(torch.DoubleTensor)  # Convert from int cuda/cpu to double cpu
+
+            if correct.sum() == 0:
+                true_positives = torch.zeros_like(all_positives)
+            else:
+                true_positives = correct.sum(dim=0)
+
+            true_positives = true_positives.type(torch.DoubleTensor)
+            positives += all_positives
+            all_true_positives += true_positives
+
+
+    print(num_correct/num_all)
+    print(all_true_positives/positives)
     print(n_emotions)
 
 

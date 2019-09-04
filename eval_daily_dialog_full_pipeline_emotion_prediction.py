@@ -11,6 +11,7 @@ from itertools import chain
 import torch
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, TensorDataset
+from ignite.utils import to_onehot
 from ignite.engine import Engine, Events
 from ignite.handlers import ModelCheckpoint
 from ignite.metrics import Accuracy, Loss, MetricsLambda, RunningAverage, Precision, ConfusionMatrix
@@ -18,7 +19,7 @@ from ignite.contrib.handlers import ProgressBar, PiecewiseLinear
 from ignite.contrib.handlers.tensorboard_logger import TensorboardLogger, OutputHandler, OptimizerParamsHandler
 
 from config import Config
-from pytorch_pretrained_bert import (OpenAIAdam, OpenAIGPTForEmotionClassification, OpenAIGPTDoubleHeadLMEmotionModel, OpenAIGPTTokenizer,
+from pytorch_pretrained_bert import (OpenAIAdam, OpenAIGPTForEmotionDetection, OpenAIGPTDoubleHeadLMEmotionRecognitionModel, OpenAIGPTTokenizer,
                                      GPT2DoubleHeadsModel, GPT2Tokenizer, WEIGHTS_NAME, CONFIG_NAME,
                                      BertModel, BertTokenizer)
 
@@ -88,6 +89,7 @@ def build_input_from_segments(history, emotions, reply, true_emotion, tokenizer,
 
     instance["mc_token_ids"] = len(instance["input_ids"]) - 1
     instance["mc_labels"] = get_emotion_label(tokenizer, true_emotion)
+
     instance["lm_labels"] = ([-1] * sum(len(s) for s in sequence[:-1])) + [-1] + sequence[-1][1:]  # all -1 except for reply, reply is just the ids
     return instance, sequence
 
@@ -96,8 +98,8 @@ def get_data_loaders(config, tokenizer):
     """ Prepare the dataset for training and evaluation """
     personachat = get_dataset_for_daily_dialog(tokenizer, config.dataset_path, config.dataset_cache, SPECIAL_TOKENS)
 
-    personachat["train"] = personachat["train"][:100]
-    personachat["valid"] = personachat["valid"][:10]
+    # personachat["train"] = personachat["train"][:100]
+    # personachat["valid"] = personachat["valid"][:10]
 
     logger.info("Build inputs and labels")
     datasets = {"train": defaultdict(list), "valid": defaultdict(list)}
@@ -113,8 +115,8 @@ def get_data_loaders(config, tokenizer):
                 reply = utterance["candidates"][-1]
                 true_emotion = utterance['candidates_emotions'][-1]
                 #skip the no_emotion sentences but keep no_emotion tags in other places
-                if true_emotion == tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS)[4]:
-                    continue
+                # if true_emotion == tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS)[4]:
+                #     continue
                 instance, _ = build_input_from_segments(history,
                                                         emotions,
                                                         reply,
@@ -177,7 +179,7 @@ def get_data_loaders1(config):
 
 
 def train():
-    config_file = "configs/train_daily_dialog_emotion_predict_config.json"
+    config_file = "configs/train_daily_dialog_full_pipeline_config.json"
     config = Config.from_json_file(config_file)
 
     # logging is set to INFO (resp. WARN) for main (resp. auxiliary) process. logger.info => log main process only, logger.warning => log all processes
@@ -193,36 +195,105 @@ def train():
         config.device = torch.device("cuda", config.local_rank)
         torch.distributed.init_process_group(backend='nccl', init_method='env://')
 
-    # model_checkpoint = "/home/rohola/codes/transfer-learning-conv-ai/logs/emotion_detection_log/"
-    # tokenizer_class = OpenAIGPTTokenizer
-    # tokenizer = tokenizer_class.from_pretrained(model_checkpoint)
-    # model_class = OpenAIGPTForEmotionClassification
-    # emotion_detection_model = model_class.from_pretrained(model_checkpoint)
-    # tokenizer.set_special_tokens(SPECIAL_TOKENS)
-    # emotion_detection_model.set_num_special_tokens(len(SPECIAL_TOKENS))
-    # emotion_detection_model.to(config.device)
+    model_checkpoint = "/home/rohola/codes/transfer-learning-conv-ai/logs/emotion_detection_log/"
+    tokenizer_class = OpenAIGPTTokenizer
+    tokenizer = tokenizer_class.from_pretrained(model_checkpoint)
+    model_class = OpenAIGPTForEmotionDetection
+    emotion_detection_model = model_class.from_pretrained(model_checkpoint)
+    tokenizer.set_special_tokens(SPECIAL_TOKENS)
+    emotion_detection_model.set_num_special_tokens(len(SPECIAL_TOKENS))
+    emotion_detection_model.to(config.device)
 
 
     logger.info("Prepare tokenizer, pretrained model and optimizer - add special tokens for fine-tuning")
     tokenizer_class = GPT2Tokenizer if "gpt2" in config.model_checkpoint else OpenAIGPTTokenizer
     tokenizer = tokenizer_class.from_pretrained(config.model_checkpoint)
-    model_class = OpenAIGPTDoubleHeadLMEmotionModel
-    emotion_classification_model = model_class.from_pretrained(config.model_checkpoint)
+    model_class = OpenAIGPTDoubleHeadLMEmotionRecognitionModel
+    emotion_recognition_model = model_class.from_pretrained(config.model_checkpoint)
     tokenizer.set_special_tokens(SPECIAL_TOKENS)
-    emotion_classification_model.set_num_special_tokens(len(SPECIAL_TOKENS))
-    emotion_classification_model.to(config.device)
-    optimizer = OpenAIAdam(emotion_classification_model.parameters(), lr=config.lr)
+    emotion_recognition_model.set_num_special_tokens(len(SPECIAL_TOKENS))
+    emotion_recognition_model.to(config.device)
+    optimizer = OpenAIAdam(emotion_recognition_model.parameters(), lr=config.lr)
 
     # Prepare model for FP16 and distributed training if needed (order is important, distributed should be the last)
     if config.fp16:
         from apex import amp  # Apex is only required if we use fp16 training
-        emotion_classification_model, optimizer = amp.initialize(emotion_classification_model, optimizer, opt_level=config.fp16)
+        emotion_recognition_model, optimizer = amp.initialize(emotion_recognition_model, optimizer, opt_level=config.fp16)
     if config.distributed:
-        emotion_classification_model = DistributedDataParallel(emotion_classification_model, device_ids=[config.local_rank], output_device=config.local_rank)
+        emotion_recognition_model = DistributedDataParallel(emotion_recognition_model, device_ids=[config.local_rank], output_device=config.local_rank)
 
     logger.info("Prepare datasets")
     train_loader, val_loader, train_sampler, valid_sampler = get_data_loaders(config, tokenizer)
-    #train_loader = get_data_loaders1(config)
+
+    emotion_detection_model.eval()
+    n_emotions = 0
+    num_correct = 0
+    all_predicted_positives = 0
+    all_true_positives = 0
+    all_actual_positives = 0
+    confusion_matrix = torch.zeros(6, 6, dtype=torch.float).cuda()
+    num_all = len(val_loader)
+    for batch in val_loader:
+        with torch.no_grad():
+            batch = tuple(input_tensor.to(config.device) for input_tensor in batch)
+            input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids, token_emotion_ids = batch
+            model_outputs = emotion_detection_model(input_ids, mc_token_ids, token_type_ids=token_type_ids)
+            lm_logits, mc_logits = model_outputs[0], model_outputs[1]  # So we can also use GPT2 outputs
+            indices = torch.argmax(mc_logits, dim=1)
+            if indices.item() != 0: #have emotion
+                recognition_output = emotion_recognition_model(input_ids,
+                                          mc_token_ids,
+                                          token_type_ids=token_type_ids,
+                                          token_emotion_ids=token_emotion_ids)
+
+                if mc_labels.item() != 0:
+                    mc_labels = mc_labels - 1
+                else:
+                    continue
+                    #mc_labels = torch.randint(0, 6, size=(1,)).cuda()
+
+                mc_recognition_logit = recognition_output[1]
+                indices = torch.argmax(mc_recognition_logit, dim=1)
+                correct = torch.eq(indices, mc_labels).view(-1)
+                num_correct += torch.sum(correct).item()
+                n_emotions += 1
+
+                #precision
+                num_classes = mc_recognition_logit.size(1)
+                print(mc_labels)
+                mc_labels = to_onehot(mc_labels.view(-1), num_classes=num_classes)
+                indices = torch.argmax(mc_recognition_logit, dim=1).view(-1)
+                mc_recognition_logit = to_onehot(indices, num_classes=num_classes)
+                mc_labels = mc_labels.type_as(mc_recognition_logit)
+                correct = mc_labels * mc_recognition_logit
+                all_positives = mc_recognition_logit.sum(dim=0).type(torch.DoubleTensor)  # Convert from int cuda/cpu to double cpu
+
+                if correct.sum() == 0:
+                    true_positives = torch.zeros_like(all_positives)
+                else:
+                    true_positives = correct.sum(dim=0)
+
+                true_positives = true_positives.type(torch.DoubleTensor)
+                all_predicted_positives += all_positives
+                all_true_positives += true_positives
+
+                #recall
+                actual_positives = mc_labels.sum(dim=0).type(torch.DoubleTensor)
+                all_actual_positives += actual_positives
+
+                #confusion matrix
+                mc_labels_t = mc_labels.transpose(0, 1).float()
+                mc_recognition_logit = mc_recognition_logit.float()
+                confusion_matrix += torch.matmul(mc_labels_t, mc_recognition_logit).float()
+
+
+    print(num_correct / n_emotions) # accuracy for all classes of emotion
+    print(n_emotions/num_all)
+
+    print(all_true_positives / all_predicted_positives)
+    print(all_true_positives / all_actual_positives)
+
+    print(confusion_matrix)
 
     # all_input_ids = None
     # all_mc_token_ids = None
@@ -261,11 +332,11 @@ def train():
 
     # # Training function and trainer
     # def update(engine, batch):
-    #     emotion_classification_model.train()
+    #     emotion_recognition_model.train()
     #     input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids, token_emotion_ids = tuple(
     #         input_tensor.to(config.device) for input_tensor in batch)
     #
-    #     lm_loss, mc_loss = emotion_classification_model(input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids, token_emotion_ids)
+    #     lm_loss, mc_loss = emotion_recognition_model(input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids, token_emotion_ids)
     #     loss = (lm_loss * config.lm_coef + mc_loss * config.mc_coef) / config.gradient_accumulation_steps
     #     if config.fp16:
     #         with amp.scale_loss(loss, optimizer) as scaled_loss:
@@ -273,7 +344,7 @@ def train():
     #         torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), config.max_norm)
     #     else:
     #         loss.backward()
-    #         torch.nn.utils.clip_grad_norm_(emotion_classification_model.parameters(), config.max_norm)
+    #         torch.nn.utils.clip_grad_norm_(emotion_recognition_model.parameters(), config.max_norm)
     #     if engine.state.iteration % config.gradient_accumulation_steps == 0:
     #         optimizer.step()
     #         optimizer.zero_grad()
@@ -283,13 +354,13 @@ def train():
     #
     # # Evaluation function and evaluator (evaluator output is the input of the metrics)
     # def inference(engine, batch):
-    #     emotion_classification_model.eval()
+    #     emotion_recognition_model.eval()
     #     with torch.no_grad():
     #         batch = tuple(input_tensor.to(config.device) for input_tensor in batch)
     #         input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids, token_emotion_ids = batch
     #         # token_emotion_ids = None
     #         # logger.info(tokenizer.decode(input_ids[0, -1, :].tolist()))
-    #         model_outputs = emotion_classification_model(input_ids, mc_token_ids, token_type_ids=token_type_ids,
+    #         model_outputs = emotion_recognition_model(input_ids, mc_token_ids, token_type_ids=token_type_ids,
     #                               token_emotion_ids=token_emotion_ids)
     #         lm_logits, mc_logits = model_outputs[0], model_outputs[1]  # So we can also use GPT2 outputs
     #         lm_logits_flat_shifted = lm_logits[..., :-1, :].contiguous().view(-1, lm_logits.size(-1))
@@ -343,10 +414,10 @@ def train():
     #
     #     checkpoint_handler = ModelCheckpoint(tb_logger.writer.log_dir, 'checkpoint', save_interval=1, n_saved=3)
     #     trainer.add_event_handler(Events.EPOCH_COMPLETED, checkpoint_handler, {
-    #         'mymodel': getattr(emotion_classification_model, 'module', emotion_classification_model)})  # "getattr" take care of distributed encapsulation
+    #         'mymodel': getattr(emotion_recognition_model, 'module', emotion_recognition_model)})  # "getattr" take care of distributed encapsulation
     #
     #     torch.save(config, tb_logger.writer.log_dir + '/model_training_args.bin')
-    #     getattr(emotion_classification_model, 'module', emotion_classification_model).config.to_json_file(os.path.join(tb_logger.writer.log_dir, CONFIG_NAME))
+    #     getattr(emotion_recognition_model, 'module', emotion_recognition_model).config.to_json_file(os.path.join(tb_logger.writer.log_dir, CONFIG_NAME))
     #     tokenizer.save_vocabulary(tb_logger.writer.log_dir)
     #
     # # Run the training

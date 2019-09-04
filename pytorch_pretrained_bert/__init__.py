@@ -10,9 +10,9 @@ from .modeling import (BertConfig, BertModel, BertForPreTraining,
                        BertForTokenClassification, BertForQuestionAnswering,
                        load_tf_weights_in_bert)
 from .modeling_openai import (OpenAIGPTConfig, OpenAIGPTModel,
-                              OpenAIGPTLMHeadModel, OpenAIGPTDoubleHeadsModel, OpenAIGPTDoubleHeadLMEmotionModel,
-                              OpenAIGPTForEmotionClassification,
-                                OpenAIGPTMultiHeadModel,
+                              OpenAIGPTLMHeadModel, OpenAIGPTDoubleHeadsModel, OpenAIGPTDoubleHeadLMEmotionRecognitionModel,
+                              OpenAIGPTForEmotionDetection,
+                              OpenAIGPTMultiHeadModel,
                               load_tf_weights_in_openai_gpt)
 from .modeling_transfo_xl import (TransfoXLConfig, TransfoXLModel, TransfoXLLMHeadModel,
                                   load_tf_weights_in_transfo_xl)

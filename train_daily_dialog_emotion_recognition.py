@@ -13,12 +13,12 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, TensorDataset
 from ignite.engine import Engine, Events
 from ignite.handlers import ModelCheckpoint
-from ignite.metrics import Accuracy, Loss, MetricsLambda, RunningAverage, Precision, ConfusionMatrix
+from ignite.metrics import Accuracy, Recall, Loss, MetricsLambda, RunningAverage, Precision, ConfusionMatrix
 from ignite.contrib.handlers import ProgressBar, PiecewiseLinear
 from ignite.contrib.handlers.tensorboard_logger import TensorboardLogger, OutputHandler, OptimizerParamsHandler
 
 from config import Config
-from pytorch_pretrained_bert import (OpenAIAdam, OpenAIGPTDoubleHeadLMEmotionModel, OpenAIGPTTokenizer,
+from pytorch_pretrained_bert import (OpenAIAdam, OpenAIGPTDoubleHeadLMEmotionRecognitionModel, OpenAIGPTTokenizer,
                                      GPT2DoubleHeadsModel, GPT2Tokenizer, WEIGHTS_NAME, CONFIG_NAME,
                                      BertModel, BertTokenizer)
 
@@ -52,19 +52,19 @@ def pad_dataset(dataset, padding=0):
 
 def get_emotion_label(tokenizer, candidate_emotion):
     _, _, _, _, no_emotion_id, happiness_id, surprise_id, sadness_id, disgust_id, anger_id, fear_id, _, _, _, _, _ = tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS)
-    if candidate_emotion == no_emotion_id:
+    if candidate_emotion == happiness_id:
         return 0
-    elif candidate_emotion == happiness_id:
-        return 1
     elif candidate_emotion == surprise_id:
-        return 2
+        return 1
     elif candidate_emotion == sadness_id:
-        return 3
+        return 2
     elif candidate_emotion == disgust_id:
-        return 4
+        return 3
     elif candidate_emotion == anger_id:
-        return 5
+        return 4
     elif candidate_emotion == fear_id:
+        return 5
+    elif candidate_emotion == no_emotion_id:
         return 6
 
 
@@ -109,6 +109,8 @@ def get_data_loaders(config, tokenizer):
                 emotions = utterance["emotion"][-(2 * config.max_history + 1):]
                 reply = utterance["candidates"][-1]
                 true_emotion = utterance['candidates_emotions'][-1]
+                if true_emotion == tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS)[4]:
+                    continue
                 instance, _ = build_input_from_segments(history,
                                                         emotions,
                                                         reply,
@@ -155,7 +157,7 @@ def get_data_loaders(config, tokenizer):
 
 
 def train():
-    config_file = "configs/train_daily_dialog_full_config.json"
+    config_file = "configs/train_daily_dialog_emotion_recognition_config.json"
     config = Config.from_json_file(config_file)
 
     # logging is set to INFO (resp. WARN) for main (resp. auxiliary) process. logger.info => log main process only, logger.warning => log all processes
@@ -173,7 +175,7 @@ def train():
     logger.info("Prepare tokenizer, pretrained model and optimizer - add special tokens for fine-tuning")
     tokenizer_class = GPT2Tokenizer if "gpt2" in config.model_checkpoint else OpenAIGPTTokenizer
     tokenizer = tokenizer_class.from_pretrained(config.model_checkpoint)
-    model_class = GPT2DoubleHeadsModel if "gpt2" in config.model_checkpoint else OpenAIGPTDoubleHeadLMEmotionModel
+    model_class = GPT2DoubleHeadsModel if "gpt2" in config.model_checkpoint else OpenAIGPTDoubleHeadLMEmotionRecognitionModel
     model = model_class.from_pretrained(config.model_checkpoint)
     tokenizer.set_special_tokens(SPECIAL_TOKENS)
     model.set_num_special_tokens(len(SPECIAL_TOKENS))
@@ -245,10 +247,14 @@ def train():
     RunningAverage(output_transform=lambda x: x).attach(trainer, "loss")
     metrics = {"nll": Loss(torch.nn.CrossEntropyLoss(ignore_index=-1), output_transform=lambda x: (x[0][0], x[1][0])),
                "accuracy": Accuracy(output_transform=lambda x: (x[0][1], x[1][1]))}
+
+    metrics.update({"precision": Precision(output_transform=lambda x: (x[0][1], x[1][1])),
+                    "recall": Recall(output_transform=lambda x: (x[0][1], x[1][1]))})
+
     metrics.update({"average_nll": MetricsLambda(average_distributed_scalar, metrics["nll"], config),
                     "average_accuracy": MetricsLambda(average_distributed_scalar, metrics["accuracy"], config)})
 
-    metrics.update({"confusion_matrix": ConfusionMatrix(num_classes=7, output_transform=lambda x: (x[0][1], x[1][1]))})
+    metrics.update({"confusion_matrix": ConfusionMatrix(num_classes=6, output_transform=lambda x: (x[0][1], x[1][1]))})
     metrics["average_ppl"] = MetricsLambda(math.exp, metrics["average_nll"])
     for name, metric in metrics.items():
         metric.attach(evaluator, name)

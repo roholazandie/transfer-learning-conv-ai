@@ -14,3 +14,4 @@ model/*
 logs/*
 *config.json
 caches/*
+_OpenAIGPTTokenizer
