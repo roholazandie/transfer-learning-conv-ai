@@ -91,8 +91,8 @@ def get_data_loaders(config, tokenizer):
     """ Prepare the dataset for training and evaluation """
     personachat = get_dataset_for_daily_dialog(tokenizer, config.dataset_path, config.dataset_cache, SPECIAL_TOKENS)
 
-    personachat["train"] = personachat["train"][:100]
-    personachat["valid"] = personachat["valid"][:10]
+    # personachat["train"] = personachat["train"][:100]
+    # personachat["valid"] = personachat["valid"][:10]
 
     logger.info("Build inputs and labels")
     datasets = {"train": defaultdict(list), "valid": defaultdict(list)}
