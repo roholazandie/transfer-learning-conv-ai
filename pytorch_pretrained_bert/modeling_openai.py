@@ -1017,8 +1017,9 @@ class OpenAIGPTForEmotionDetection(OpenAIGPTPreTrainedModel):
         self.lm_head.set_embeddings_weights(self.transformer.tokens_embed.weight,
                                             predict_special_tokens=predict_special_tokens)
 
-    def forward(self, input_ids, mc_token_ids, lm_labels=None, mc_labels=None, token_type_ids=None, position_ids=None):
-        hidden_states = self.transformer(input_ids, position_ids, token_type_ids)
+    def forward(self, input_ids, mc_token_ids, lm_labels=None,
+                mc_labels=None, token_type_ids=None, position_ids=None, token_emotion_ids=None):
+        hidden_states = self.transformer(input_ids, position_ids, token_type_ids, token_emotion_ids=token_emotion_ids)
         if self.transformer.output_attentions:
             all_attentions, hidden_states = hidden_states
         lm_logits = self.lm_head(hidden_states)

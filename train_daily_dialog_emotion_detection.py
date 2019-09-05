@@ -28,8 +28,8 @@ SPECIAL_TOKENS = ["<bos>", "<eos>", "<speaker1>", "<speaker2>",
                   "<no_emotion>", "<emotion>",
                   "<directive>", "<inform>", "<commissive>", "<question>",
                   "<pad>"]
-MODEL_INPUTS = ["input_ids", "mc_token_ids", "lm_labels", "mc_labels", "token_type_ids"]
-PADDED_INPUTS = ["input_ids", "lm_labels", "token_type_ids"]
+MODEL_INPUTS = ["input_ids", "mc_token_ids", "lm_labels", "mc_labels", "token_type_ids", "token_emotion_ids"]
+PADDED_INPUTS = ["input_ids", "lm_labels", "token_type_ids", "token_emotion_ids"]
 
 logger = logging.getLogger(__file__)
 
@@ -79,7 +79,7 @@ def build_input_from_segments(history, emotions, reply, true_emotion, tokenizer,
     instance["input_ids"] = list(chain(*sequence))
     instance["token_type_ids"] = [speaker2 if i % 2 else speaker1 for i, s in enumerate(sequence) for _ in s] # the last for is for repeating the speaker1 and speaker2 for all tokens
     #instance["token_emotion_ids"] = [emotions[i] for i, s in enumerate(sequence[:-1]) for _ in s] + [true_emotion] * len(sequence[-1])
-    #instance["token_emotion_ids"] = [emotions[i] for i, s in enumerate(sequence[:-1]) for _ in s]
+    instance["token_emotion_ids"] = [emotions[i] for i, s in enumerate(sequence[:-1]) for _ in s]
 
     instance["mc_token_ids"] = len(instance["input_ids"]) - 1
     instance["mc_labels"] = 0 if true_emotion == no_emotion_id else 1
@@ -191,9 +191,9 @@ def train():
     # Training function and trainer
     def update(engine, batch):
         model.train()
-        input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids = tuple(input_tensor.to(config.device) for input_tensor in batch)
+        input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids, token_emotion_ids = tuple(input_tensor.to(config.device) for input_tensor in batch)
         #token_emotion_ids = None
-        lm_loss, mc_loss = model(input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids)
+        lm_loss, mc_loss = model(input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids, token_emotion_ids=token_emotion_ids)
         loss = (lm_loss * config.lm_coef + mc_loss * config.mc_coef) / config.gradient_accumulation_steps
         if config.fp16:
             with amp.scale_loss(loss, optimizer) as scaled_loss:
@@ -213,9 +213,9 @@ def train():
         model.eval()
         with torch.no_grad():
             batch = tuple(input_tensor.to(config.device) for input_tensor in batch)
-            input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids = batch
+            input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids, token_emotion_ids = batch
             #logger.info(tokenizer.decode(input_ids[0, -1, :].tolist()))
-            model_outputs = model(input_ids, mc_token_ids, token_type_ids=token_type_ids)
+            model_outputs = model(input_ids, mc_token_ids, token_type_ids=token_type_ids, token_emotion_ids=token_emotion_ids)
             lm_logits, mc_logits = model_outputs[0], model_outputs[1]  # So we can also use GPT2 outputs
             lm_logits_flat_shifted = lm_logits[..., :-1, :].contiguous().view(-1, lm_logits.size(-1))
             lm_labels_flat_shifted = lm_labels[..., 1:].contiguous().view(-1)
