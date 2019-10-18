@@ -149,7 +149,6 @@ def get_dataset_personalities(tokenizer, dataset_path, dataset_cache=None):
     return personalities
 
 
-
 def _prec_recall_f1_score(pred_items, gold_items):
     """
     Compute precision, recall and f1 given a set of gold and prediction items.

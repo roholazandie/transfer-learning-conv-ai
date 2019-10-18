@@ -94,10 +94,9 @@ def run():
     parser.add_argument("--dataset_path", type=str, default="/home/rohola/data/daily_dialog_full/daily_dialog.json",
                         help="Path or url of the dataset. If empty download from S3.")
     parser.add_argument("--model", type=str, default="openai-gpt", help="Model type (gpt or gpt2)")
-    parser.add_argument("--dataset_cache", type=str, default='./caches/daily_dialog_emotion_action_dataset_cache', help="Path or url of the dataset cache")
-    parser.add_argument("--model_checkpoint", type=str, default="/home/rohola/codes/transfer-learning-conv-ai/logs/logs9", help="Path, url or short name of the model")
-    #parser.add_argument("--model_checkpoint", type=str, default="gpt2", help="Path, url or short name of the model")
-    #parser.add_argument("--model_checkpoint", type=str, default="/home/rohola/data/bert_checkpoint", help="Path, url or short name of the model")
+    parser.add_argument("--dataset_cache", type=str, default='./caches/dataset_cache_OpenAIGPTTokenizer', help="Path or url of the dataset cache")
+    parser.add_argument("--model_checkpoint", type=str, default="/home/rohola/codes/transfer-learning-conv-ai/logs/emotion_detection_log", help="Path, url or short name of the model")
+    #parser.add_argument("--model_checkpoint", type=str, default="", help="Path, url or short name of the model")
     parser.add_argument("--max_history", type=int, default=2, help="Number of previous utterances to keep in history")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu",
                         help="Device (cuda or cpu)")
@@ -134,10 +133,7 @@ def run():
         tokenizer_class = OpenAIGPTTokenizer
         model_class = OpenAIGPTLMHeadModel
 
-    if args.model == "bert":
-        SPECIAL_TOKENS = ["[BOS]", "[EOS]", "[SPEAKER1]", "[SPEAKER2]", "[PAD]"]
-    else:
-        SPECIAL_TOKENS = ["<bos>", "<eos>", "<speaker1>", "<speaker2>", "<pad>"]
+    SPECIAL_TOKENS = ["<bos>", "<eos>", "<speaker1>", "<speaker2>", "<pad>"]
 
     tokenizer = tokenizer_class.from_pretrained(args.model_checkpoint)
     model = model_class.from_pretrained(args.model_checkpoint)

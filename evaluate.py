@@ -11,6 +11,7 @@ import numpy as np
 
 import torch
 import torch.nn.functional as F
+from tqdm import tqdm
 
 from pytorch_pretrained_bert import OpenAIGPTLMHeadModel, OpenAIGPTTokenizer, GPT2LMHeadModel, GPT2Tokenizer
 from train import SPECIAL_TOKENS, build_input_from_segments
@@ -91,25 +92,31 @@ def calculate_metrics(args, model, tokenizer, dataset, special_tokens):
 
     all_blues = []
     all_f1_scores = []
-    for data in dataset['valid']:
+    for data in tqdm(dataset['valid']):
         personality = data['personality']
         utterances = data['utterances']
 
         #utterance = utterances[-1] #only the longest conversaion
-
         for utterance in utterances:
-
             true_label = utterance['candidates'][-1]
             history = utterance['history']
-
             predicted_output = []
             for i in range(args.max_length):
                 instance, _ = build_input_from_segments(personality, history, predicted_output, tokenizer, special_tokens, with_eos=False)
 
-                input_ids = torch.tensor(instance["input_ids"], device=args.device).unsqueeze(0)
-                token_type_ids = torch.tensor(instance["token_type_ids"], device=args.device).unsqueeze(0)
+                try:
 
-                logits = model(input_ids, token_type_ids=token_type_ids)
+                    if len(instance["input_ids"]) > 310:
+                        truncated_history = [hist[:5] for hist in history]
+                        instance, _ = build_input_from_segments(personality, truncated_history, predicted_output, tokenizer, special_tokens, with_eos=False)
+
+                    input_ids = torch.tensor(instance["input_ids"], device=args.device).unsqueeze(0)
+                    token_type_ids = torch.tensor(instance["token_type_ids"], device=args.device).unsqueeze(0)
+
+                    logits = model(input_ids, token_type_ids=token_type_ids)
+                except:
+                    print("exception")
+                    continue
 
                 if "gpt2" == args.model:
                     logits = logits[0]
@@ -131,6 +138,8 @@ def calculate_metrics(args, model, tokenizer, dataset, special_tokens):
             predicted_sentence = tokenizer.decode(predicted_output, skip_special_tokens=True)
             true_sentence = tokenizer.decode(true_label, skip_special_tokens=True)
             #looks like zero gives the best results
+
+
             bleus = [_bleu(predicted_sentence, [true_sentence], method="method"+str(i)) for i in [0,1,2,3,5]]
             #bleu = _bleu(predicted_sentence, [true_sentence])
             f1_score = _f1_score(predicted_sentence, [true_sentence])
@@ -143,15 +152,16 @@ def calculate_metrics(args, model, tokenizer, dataset, special_tokens):
 
     print("avg bleu", np.array(all_blues).mean(axis=0))
     print("avg f1 score", np.mean(all_f1_scores))
+    print("max bleu", np.array(all_blues).max(axis=0))
 
 
 def run():
     parser = ArgumentParser()
-    parser.add_argument("--dataset_path", type=str, default="",
+    parser.add_argument("--dataset_path", type=str, default="/home/rohola/data/daily_dialog_full/daily_dialog.json",
                         help="Path or url of the dataset. If empty download from S3.")
     parser.add_argument("--model", type=str, default="openai-gpt", help="Model type (gpt or gpt2)")
-    parser.add_argument("--dataset_cache", type=str, default='./dataset_cache', help="Path or url of the dataset cache")
-    parser.add_argument("--model_checkpoint", type=str, default="/home/rohola/codes/transfer-learning-conv-ai/logs/logs1", help="Path, url or short name of the model")
+    parser.add_argument("--dataset_cache", type=str, default='./caches/dataset_cache_OpenAIGPTTokenizer', help="Path or url of the dataset cache")
+    parser.add_argument("--model_checkpoint", type=str, default="/home/rohola/codes/transfer-learning-conv-ai/logs/logs2", help="Path, url or short name of the model")
     parser.add_argument("--max_history", type=int, default=2, help="Number of previous utterances to keep in history")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu",
                         help="Device (cuda or cpu)")
@@ -162,7 +172,7 @@ def run():
     parser.add_argument("--seed", type=int, default=42, help="Seed")
     parser.add_argument("--temperature", type=int, default=0.7, help="Sampling softmax temperature")
     parser.add_argument("--top_k", type=int, default=0, help="Filter top-k tokens before sampling (<=0: no filtering)")
-    parser.add_argument("--top_p", type=float, default=0.9,
+    parser.add_argument("--top_p", type=float, default=0.7,
                         help="Nucleus filtering (top-p) before sampling (<=0.0: no filtering)")
     args = parser.parse_args()
 

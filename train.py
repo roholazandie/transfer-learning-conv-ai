@@ -69,8 +69,8 @@ def get_data_loaders(args, tokenizer):
     personachat = get_dataset(tokenizer, args.dataset_path, args.dataset_cache)
 
     # todo remove soon
-    personachat["train"] = personachat["train"][:1000]
-    personachat["valid"] = personachat["valid"][:100]
+    #personachat["train"] = personachat["train"][:1000]
+    #personachat["valid"] = personachat["valid"][:100]
 
     logger.info("Build inputs and labels")
     datasets = {"train": defaultdict(list), "valid": defaultdict(list)}
