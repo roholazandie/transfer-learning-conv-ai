@@ -25,6 +25,7 @@ from utils import get_dataset_for_daily_dialog
 
 SPECIAL_TOKENS = ["<bos>", "<eos>", "<speaker1>", "<speaker2>",
                   "<no_emotion>", "<happiness>", "<surprise>", "<sadness>", "<disgust>", "<anger>", "<fear>",
+                 "<work>", "<finance>", "<relationship>", "<attitude_and_emotion>", "<culture_and_educastion>", "<school_life>", "<tourism>", "<ordinary_life>", "<politics>", "<health>",
                   "<directive>", "<inform>", "<commissive>", "<question>",
                   "<pad>"]
 MODEL_INPUTS = ["input_ids", "mc_token_ids", "lm_labels", "mc_labels",
