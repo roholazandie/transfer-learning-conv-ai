@@ -87,11 +87,23 @@ def sample_sequence(personality, history, tokenizer, model, args, current_output
     return current_output
 
 
+def get_emotions(dataset):
+
+
+    for data in tqdm(dataset['valid']):
+        utterances = data['utterances']
+
+        for utterance in utterances:
+            true_emotion = utterance["emotion"]
+
+
 def calculate_metrics(args, model, tokenizer, dataset, special_tokens):
     special_tokens_ids = tokenizer.convert_tokens_to_ids(special_tokens)
 
     all_blues = []
     all_f1_scores = []
+    all_true_sentences = []
+    all_predicted_sentences = []
     for data in tqdm(dataset['valid']):
         personality = data['personality']
         utterances = data['utterances']
@@ -125,20 +137,25 @@ def calculate_metrics(args, model, tokenizer, dataset, special_tokens):
                 probs = F.softmax(logits, dim=-1)
 
                 prev = torch.topk(probs, 1)[1] if args.no_sample else torch.multinomial(probs, 1)
-                if i < args.min_length and prev.item() in special_tokens_ids:  # todo rooh: to remove special tokens
-                    k=0
-                    while prev.item() in special_tokens_ids and k < 100:
-                        prev = torch.multinomial(probs, num_samples=1)
-                        k+=1
+                # if i < args.min_length and prev.item() in special_tokens_ids:  # todo rooh: to remove special tokens
+                #     k=0
+                #     while prev.item() in special_tokens_ids and k < 100:
+                #         prev = torch.multinomial(probs, num_samples=1)
+                #         k+=1
 
-                if prev.item() in special_tokens_ids:
-                    break
+                if i < args.min_length:  # todo rooh: to remove special tokens
+                    prev = torch.multinomial(probs, num_samples=1)
+
+                # if prev.item() in special_tokens_ids:
+                #     break
                 predicted_output.append(prev.item())
 
             predicted_sentence = tokenizer.decode(predicted_output, skip_special_tokens=True)
             true_sentence = tokenizer.decode(true_label, skip_special_tokens=True)
             #looks like zero gives the best results
 
+            all_predicted_sentences.append(predicted_sentence)
+            all_true_sentences.append(true_sentence)
 
             bleus = [_bleu(predicted_sentence, [true_sentence], method="method"+str(i)) for i in [0,1,2,3,5]]
             #bleu = _bleu(predicted_sentence, [true_sentence])
@@ -149,6 +166,9 @@ def calculate_metrics(args, model, tokenizer, dataset, special_tokens):
             #compare predicted and label with bleu
 
 
+    with open("/home/rohola/codes/transfer-learning-conv-ai/out/emotion_correlation_input.txt", 'w') as fw:
+        for predicted_sentence, true_sentence in zip(all_predicted_sentences, all_true_sentences):
+            fw.write(predicted_sentence + "\t" + true_sentence + "\n")
 
     print("avg bleu", np.array(all_blues).mean(axis=0))
     print("avg f1 score", np.mean(all_f1_scores))
@@ -161,7 +181,7 @@ def run():
                         help="Path or url of the dataset. If empty download from S3.")
     parser.add_argument("--model", type=str, default="openai-gpt", help="Model type (gpt or gpt2)")
     parser.add_argument("--dataset_cache", type=str, default='./caches/dataset_cache_OpenAIGPTTokenizer', help="Path or url of the dataset cache")
-    parser.add_argument("--model_checkpoint", type=str, default="/home/rohola/codes/transfer-learning-conv-ai/logs/logs2", help="Path, url or short name of the model")
+    parser.add_argument("--model_checkpoint", type=str, default="/home/rohola/codes/transfer-learning-conv-ai/logs/logs9", help="Path, url or short name of the model")
     parser.add_argument("--max_history", type=int, default=2, help="Number of previous utterances to keep in history")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu",
                         help="Device (cuda or cpu)")
@@ -172,7 +192,7 @@ def run():
     parser.add_argument("--seed", type=int, default=42, help="Seed")
     parser.add_argument("--temperature", type=int, default=0.7, help="Sampling softmax temperature")
     parser.add_argument("--top_k", type=int, default=0, help="Filter top-k tokens before sampling (<=0: no filtering)")
-    parser.add_argument("--top_p", type=float, default=0.7,
+    parser.add_argument("--top_p", type=float, default=0.9,
                         help="Nucleus filtering (top-p) before sampling (<=0.0: no filtering)")
     args = parser.parse_args()
 
@@ -200,6 +220,7 @@ def run():
 
     special_tokens = ["<bos>", "<eos>", "<speaker1>", "<speaker2>", "<pad>"]
     calculate_metrics(args, model, tokenizer, dataset, special_tokens)
+    #get_emotions(dataset)
 
 
 if __name__ == "__main__":

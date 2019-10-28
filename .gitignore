@@ -15,3 +15,4 @@ logs/*
 *config.json
 caches/*
 _OpenAIGPTTokenizer
+out
