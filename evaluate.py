@@ -137,13 +137,13 @@ def calculate_metrics(args, model, tokenizer, dataset, special_tokens):
                 probs = F.softmax(logits, dim=-1)
 
                 prev = torch.topk(probs, 1)[1] if args.no_sample else torch.multinomial(probs, 1)
-                # if i < args.min_length and prev.item() in special_tokens_ids:  # todo rooh: to remove special tokens
+                # if i < args.min_length and prev.item() in special_tokens_ids:
                 #     k=0
                 #     while prev.item() in special_tokens_ids and k < 100:
                 #         prev = torch.multinomial(probs, num_samples=1)
                 #         k+=1
 
-                if i < args.min_length:  # todo rooh: to remove special tokens
+                if i < args.min_length:
                     prev = torch.multinomial(probs, num_samples=1)
 
                 # if prev.item() in special_tokens_ids:
@@ -181,7 +181,7 @@ def run():
                         help="Path or url of the dataset. If empty download from S3.")
     parser.add_argument("--model", type=str, default="openai-gpt", help="Model type (gpt or gpt2)")
     parser.add_argument("--dataset_cache", type=str, default='./caches/dataset_cache_OpenAIGPTTokenizer', help="Path or url of the dataset cache")
-    parser.add_argument("--model_checkpoint", type=str, default="/home/rohola/codes/transfer-learning-conv-ai/logs/logs9", help="Path, url or short name of the model")
+    parser.add_argument("--model_checkpoint", type=str, default="/home/rohola/codes/transfer-learning-conv-ai/logs/emotion_recognition_log", help="Path, url or short name of the model")
     parser.add_argument("--max_history", type=int, default=2, help="Number of previous utterances to keep in history")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu",
                         help="Device (cuda or cpu)")

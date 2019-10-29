@@ -93,8 +93,8 @@ def get_data_loaders(config, tokenizer):
     """ Prepare the dataset for training and evaluation """
     personachat = get_dataset_for_daily_dialog(tokenizer, config.dataset_path, config.dataset_cache, SPECIAL_TOKENS)
 
-    personachat["train"] = personachat["train"][:100]
-    personachat["valid"] = personachat["valid"][:10]
+    # personachat["train"] = personachat["train"][:100]
+    # personachat["valid"] = personachat["valid"][:10]
 
     logger.info("Build inputs and labels")
     datasets = {"train": defaultdict(list), "valid": defaultdict(list)}
@@ -109,8 +109,8 @@ def get_data_loaders(config, tokenizer):
                 emotions = utterance["emotion"][-(2 * config.max_history + 1):]
                 reply = utterance["candidates"][-1]
                 true_emotion = utterance['candidates_emotions'][-1]
-                if true_emotion == tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS)[4]:
-                    continue
+                #if true_emotion == tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS)[4]:
+                #    continue
                 instance, _ = build_input_from_segments(history,
                                                         emotions,
                                                         reply,
@@ -219,7 +219,6 @@ def train():
             batch = tuple(input_tensor.to(config.device) for input_tensor in batch)
             input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids, token_emotion_ids = batch
             #token_emotion_ids = None
-            #logger.info(tokenizer.decode(input_ids[0, -1, :].tolist()))
             model_outputs = model(input_ids, mc_token_ids, token_type_ids=token_type_ids, token_emotion_ids=token_emotion_ids)
             lm_logits, mc_logits = model_outputs[0], model_outputs[1]  # So we can also use GPT2 outputs
             lm_logits_flat_shifted = lm_logits[..., :-1, :].contiguous().view(-1, lm_logits.size(-1))
@@ -254,7 +253,7 @@ def train():
     metrics.update({"average_nll": MetricsLambda(average_distributed_scalar, metrics["nll"], config),
                     "average_accuracy": MetricsLambda(average_distributed_scalar, metrics["accuracy"], config)})
 
-    metrics.update({"confusion_matrix": ConfusionMatrix(num_classes=6, output_transform=lambda x: (x[0][1], x[1][1]))})
+    metrics.update({"confusion_matrix": ConfusionMatrix(num_classes=7, output_transform=lambda x: (x[0][1], x[1][1]))})
     metrics["average_ppl"] = MetricsLambda(math.exp, metrics["average_nll"])
     for name, metric in metrics.items():
         metric.attach(evaluator, name)
