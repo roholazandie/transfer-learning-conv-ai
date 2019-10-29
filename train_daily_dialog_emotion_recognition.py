@@ -109,8 +109,8 @@ def get_data_loaders(config, tokenizer):
                 emotions = utterance["emotion"][-(2 * config.max_history + 1):]
                 reply = utterance["candidates"][-1]
                 true_emotion = utterance['candidates_emotions'][-1]
-                #if true_emotion == tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS)[4]:
-                #    continue
+                if true_emotion == tokenizer.convert_tokens_to_ids(SPECIAL_TOKENS)[4]:
+                   continue
                 instance, _ = build_input_from_segments(history,
                                                         emotions,
                                                         reply,
@@ -175,7 +175,7 @@ def train():
     logger.info("Prepare tokenizer, pretrained model and optimizer - add special tokens for fine-tuning")
     tokenizer_class = GPT2Tokenizer if "gpt2" in config.model_checkpoint else OpenAIGPTTokenizer
     tokenizer = tokenizer_class.from_pretrained(config.model_checkpoint)
-    model_class = GPT2DoubleHeadsModel if "gpt2" in config.model_checkpoint else OpenAIGPTDoubleHeadLMEmotionRecognitionModel
+    model_class = OpenAIGPTDoubleHeadLMEmotionRecognitionModel
     model = model_class.from_pretrained(config.model_checkpoint)
     tokenizer.set_special_tokens(SPECIAL_TOKENS)
     model.set_num_special_tokens(len(SPECIAL_TOKENS))
@@ -253,7 +253,7 @@ def train():
     metrics.update({"average_nll": MetricsLambda(average_distributed_scalar, metrics["nll"], config),
                     "average_accuracy": MetricsLambda(average_distributed_scalar, metrics["accuracy"], config)})
 
-    metrics.update({"confusion_matrix": ConfusionMatrix(num_classes=7, output_transform=lambda x: (x[0][1], x[1][1]))})
+    metrics.update({"confusion_matrix": ConfusionMatrix(num_classes=6, output_transform=lambda x: (x[0][1], x[1][1]))})
     metrics["average_ppl"] = MetricsLambda(math.exp, metrics["average_nll"])
     for name, metric in metrics.items():
         metric.attach(evaluator, name)
