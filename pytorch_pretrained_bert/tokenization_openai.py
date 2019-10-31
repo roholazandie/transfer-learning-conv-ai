@@ -135,7 +135,7 @@ class OpenAIGPTTokenizer(object):
         try:
             import ftfy
             import spacy
-            self.nlp = spacy.load('en', disable=['parser', 'tagger', 'ner', 'textcat'])
+            self.nlp = spacy.load('en_core_web_sm', disable=['parser', 'tagger', 'ner', 'textcat'])
             self.fix_text = ftfy.fix_text
         except ImportError:
             logger.warning("ftfy or spacy is not installed using BERT BasicTokenizer instead of SpaCy & ftfy.")
