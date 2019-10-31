@@ -886,7 +886,7 @@ class OpenAIGPTEmotionChoiceHead(nn.Module):
         super(OpenAIGPTEmotionChoiceHead, self).__init__()
         self.n_embd = config.n_embd
         self.dropout = nn.Dropout2d(config.resid_pdrop)  # To reproduce the noise_shape parameter of TF implementation
-        num_emotions = 6
+        num_emotions = 7
         self.linear = nn.Linear(config.n_embd, num_emotions)
 
         nn.init.normal_(self.linear.weight, std=0.02)

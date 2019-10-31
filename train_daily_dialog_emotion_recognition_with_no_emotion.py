@@ -93,8 +93,8 @@ def get_data_loaders(config, tokenizer):
     """ Prepare the dataset for training and evaluation """
     personachat = get_dataset_for_daily_dialog(tokenizer, config.dataset_path, config.dataset_cache, SPECIAL_TOKENS)
 
-    # personachat["train"] = personachat["train"][:100]
-    # personachat["valid"] = personachat["valid"][:10]
+    personachat["train"] = personachat["train"][:100]
+    personachat["valid"] = personachat["valid"][:10]
 
     logger.info("Build inputs and labels")
     datasets = {"train": defaultdict(list), "valid": defaultdict(list)}
@@ -155,7 +155,7 @@ def get_data_loaders(config, tokenizer):
 
 
 def train():
-    config_file = "configs/train_daily_dialog_full_config.json"
+    config_file = "configs/train_daily_dialog_emotion_recognition_with_no_emotion_config.json"
     config = Config.from_json_file(config_file)
 
     # logging is set to INFO (resp. WARN) for main (resp. auxiliary) process. logger.info => log main process only, logger.warning => log all processes
@@ -173,7 +173,7 @@ def train():
     logger.info("Prepare tokenizer, pretrained model and optimizer - add special tokens for fine-tuning")
     tokenizer_class = GPT2Tokenizer if "gpt2" in config.model_checkpoint else OpenAIGPTTokenizer
     tokenizer = tokenizer_class.from_pretrained(config.model_checkpoint)
-    model_class = GPT2DoubleHeadsModel if "gpt2" in config.model_checkpoint else OpenAIGPTDoubleHeadLMEmotionRecognitionModel
+    model_class = OpenAIGPTDoubleHeadLMEmotionRecognitionModel
     model = model_class.from_pretrained(config.model_checkpoint)
     tokenizer.set_special_tokens(SPECIAL_TOKENS)
     model.set_num_special_tokens(len(SPECIAL_TOKENS))
